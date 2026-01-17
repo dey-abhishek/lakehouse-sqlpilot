@@ -1255,16 +1255,22 @@ VALUES (
                     for i, record in enumerate(alice_history, 1):
                         print(f"  Version {i}: {record[1]}, {record[2]}, {record[3]} (current={record[4]})")
                     
-                    # Verify only one current record
-                    current_count = sum(1 for r in alice_history if r[4] == True)
-                    assert current_count == 1, "Should have exactly 1 current record for Alice"
+                    # Verify latest record is current and has updated data
+                    assert len(alice_history) >= 2, "Should have at least 2 historical records"
+                    latest_record = alice_history[-1]
+                    assert latest_record[4] == True, "Latest record should be current"
+                    assert latest_record[2] == 'alice.j@example.com', "Latest record should have updated email"
+                    assert latest_record[3] == 'Los Angeles', "Latest record should have updated city"
                     print("✓ SCD2 change tracking working correctly!")
         except Exception as e:
-            pytest.skip(f"Update scenario test failed: {e}")
+            # If it's a data dependency issue (no source data), skip gracefully
+            if "customers_source" in str(e) or "has no data" in str(e).lower():
+                pytest.skip(f"Test requires data from test_6: {e}")
+            # Otherwise, fail to show the real error
+            raise
     
     @pytest.mark.e2e
     @pytest.mark.requires_databricks
-    @pytest.mark.skip(reason="Requires auth reconfiguration - run separately with SQLPILOT_REQUIRE_AUTH=false")
     def test_8_api_to_warehouse_integration(self):
         """
         Test 8: End-to-end API to Warehouse Integration

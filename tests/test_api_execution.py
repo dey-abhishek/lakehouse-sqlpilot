@@ -5,7 +5,7 @@ Tests the execution and status endpoints for plan execution
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 import sys
 from pathlib import Path
 
@@ -23,15 +23,45 @@ def client():
 class TestExecutionEndpoints:
     """Test plan execution endpoints"""
     
-    @pytest.mark.skip(reason="Async execution requires live database connection")
     @patch('api.main.SQLExecutor')
     @patch('api.main.ExecutionTracker')
     @patch('os.getenv')
     def test_execute_plan_success(self, mock_getenv, mock_tracker_class, mock_executor_class, client):
         """Test successful plan execution"""
-        # This test would require real async execution setup
-        # Skipped for now - execution endpoints are tested in integration tests
-        pass
+        # Mock environment variables
+        def getenv_side_effect(key, default=""):
+            env_vars = {
+                "DATABRICKS_HOST": "https://test.databricks.com",
+                "DATABRICKS_TOKEN": "test_token",
+                "DATABRICKS_WAREHOUSE_ID": "wh-123"
+            }
+            return env_vars.get(key, default)
+        
+        mock_getenv.side_effect = getenv_side_effect
+        
+        # Mock executor and tracker
+        mock_executor_instance = MagicMock()
+        mock_executor_instance.execute_async = AsyncMock(return_value="exec-123")
+        mock_executor_class.return_value = mock_executor_instance
+        
+        mock_tracker_instance = MagicMock()
+        mock_tracker_class.return_value = mock_tracker_instance
+        
+        request = {
+            "plan_id": "plan-123",
+            "plan_version": "1.0.0",
+            "sql": "INSERT INTO table SELECT * FROM source",
+            "warehouse_id": "wh-123",
+            "executor_user": "test@databricks.com",
+            "timeout_seconds": 300
+        }
+        
+        response = client.post("/api/v1/plans/execute", json=request)
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["execution_id"] == "exec-123"
     
     @patch('os.getenv')
     def test_execute_plan_missing_credentials(self, mock_getenv, client):

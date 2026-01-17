@@ -122,14 +122,18 @@ real_credentials/
 backup/
 
 # OAuth & Authentication Scripts (CRITICAL - contain tokens/URLs)
+# Scripts that generate/manage OAuth tokens - NEVER commit
 manual_oauth.py
-oauth_*.py
 verify_oauth.py
 generate_oauth.py
 refresh_token.py
 setup_env.sh
 preflight_check.py
 *_credentials.py
+
+# OAuth scripts pattern (but not security/oauth_manager.py which is production code)
+scripts/oauth_*.py
+scripts/security/oauth_*.py
 
 # Documentation (except README.md)
 # Keep README.md in git, ignore all other docs to prevent info leakage

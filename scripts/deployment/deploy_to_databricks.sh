@@ -83,7 +83,7 @@ if databricks secrets list-scopes | grep -q "$SECRET_SCOPE"; then
     echo -e "${GREEN}✅ Secret scope '$SECRET_SCOPE' already exists${NC}"
 else
     echo "Creating secret scope '$SECRET_SCOPE'..."
-    databricks secrets create-scope --scope "$SECRET_SCOPE"
+    databricks secrets create-scope "$SECRET_SCOPE"
     echo -e "${GREEN}✅ Secret scope created${NC}"
 fi
 
@@ -125,8 +125,8 @@ if [ -f ".env" ]; then
         if [ -n "$secret_value" ]; then
             echo "Uploading secret: $secret_key"
             echo "$secret_value" | databricks secrets put-secret \
-                --scope "$SECRET_SCOPE" \
-                --key "$secret_key" 2>/dev/null || true
+                "$SECRET_SCOPE" \
+                "$secret_key" 2>/dev/null || true
             echo -e "${GREEN}✅ Secret uploaded: $secret_key${NC}"
         else
             echo -e "${YELLOW}⚠️  Skipping empty secret: $secret_key${NC}"
@@ -146,9 +146,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 echo "Granting READ access to app service principal..."
 databricks secrets put-acl \
-    --scope "$SECRET_SCOPE" \
-    --principal "$APP_NAME" \
-    --permission READ 2>/dev/null || echo -e "${YELLOW}⚠️  ACL may already exist or will be set during app creation${NC}"
+    "$SECRET_SCOPE" \
+    "$APP_NAME" \
+    READ 2>/dev/null || echo -e "${YELLOW}⚠️  ACL may already exist or will be set during app creation${NC}"
 
 echo -e "${GREEN}✅ Access configured${NC}"
 echo ""

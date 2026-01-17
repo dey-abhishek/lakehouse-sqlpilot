@@ -22,6 +22,12 @@ from compiler import SQLCompiler
 from plan_schema.v1.validator import PlanValidator
 from execution import SQLExecutor
 from unity_catalog import PermissionValidator
+
+# Import from new location
+import sys
+from pathlib import Path
+scripts_security_path = Path(__file__).parent.parent / "scripts" / "security"
+sys.path.insert(0, str(scripts_security_path))
 from secrets_manager import get_secret
 
 # Import REST API helper for bypassing Python connector limitations

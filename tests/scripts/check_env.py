@@ -8,9 +8,12 @@ Supports both .env files and secrets manager backends.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import sys
 
-# Try to import secrets manager
+# Try to import secrets manager from new location
 try:
+    scripts_security_path = Path(__file__).parent.parent.parent / "scripts" / "security"
+    sys.path.insert(0, str(scripts_security_path))
     from secrets_manager import get_secret, get_secrets_manager
     secrets_available = True
 except ImportError:

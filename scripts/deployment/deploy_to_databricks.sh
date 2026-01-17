@@ -192,16 +192,54 @@ fi
 
 echo ""
 
-# Step 7: Create or update app
-echo -e "${YELLOW}Step 7: Deploying App${NC}"
+# Step 7: Upload source code and deploy app
+echo -e "${YELLOW}Step 7: Uploading Source Code and Deploying App${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Get current user and construct workspace path
+CURRENT_USER=$(databricks current-user me --output json | python3 -c "import json, sys; print(json.load(sys.stdin)['userName'])" 2>/dev/null || echo "user")
+WORKSPACE_PATH="/Workspace/Users/${CURRENT_USER}/${APP_NAME}"
+
+echo "Workspace path: $WORKSPACE_PATH"
+
+# Remove existing workspace directory if it exists
+echo "Cleaning up existing workspace directory..."
+databricks workspace rm -r "$WORKSPACE_PATH" 2>/dev/null || true
+
+# Create workspace directory
+echo "Creating workspace directory..."
+databricks workspace mkdirs "$WORKSPACE_PATH" || {
+    echo -e "${RED}❌ Failed to create workspace directory${NC}"
+    exit 1
+}
+
+# Upload source code to workspace (excluding unnecessary files)
+echo "Uploading source code to workspace..."
+databricks workspace import-dir . "$WORKSPACE_PATH" \
+    --exclude-pattern="*.pyc" \
+    --exclude-pattern="__pycache__" \
+    --exclude-pattern=".git" \
+    --exclude-pattern=".pytest_cache" \
+    --exclude-pattern="*.egg-info" \
+    --exclude-pattern="node_modules" \
+    --exclude-pattern="dist" \
+    --exclude-pattern="build" \
+    --exclude-pattern=".env" \
+    --exclude-pattern="sqlpilot" \
+    --exclude-pattern="terminals" \
+    --overwrite || {
+    echo -e "${RED}❌ Failed to upload source code${NC}"
+    exit 1
+}
+
+echo -e "${GREEN}✅ Source code uploaded to $WORKSPACE_PATH${NC}"
 
 # Check if app exists
 if databricks apps get "$APP_NAME" &> /dev/null; then
-    echo "App '$APP_NAME' exists. Updating..."
+    echo "App '$APP_NAME' exists. Deploying update..."
     
-    # Update app
-    databricks apps deploy "$APP_NAME" . || {
+    # Deploy app from workspace path
+    databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH" || {
         echo -e "${RED}❌ Deployment failed${NC}"
         exit 1
     }
@@ -218,9 +256,9 @@ else
     
     echo -e "${GREEN}✅ App created${NC}"
     
-    # Deploy app
+    # Deploy app from workspace path
     echo "Deploying app..."
-    databricks apps deploy "$APP_NAME" --source-code-path . || {
+    databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH" || {
         echo -e "${RED}❌ Deployment failed${NC}"
         exit 1
     }

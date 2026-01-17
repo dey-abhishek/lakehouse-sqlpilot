@@ -96,31 +96,16 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 if [ -f ".env" ]; then
     echo "Found .env file. Loading secrets..."
     
-    # Map of .env variables to secret keys
-    declare -A SECRET_MAP=(
-        ["DATABRICKS_SERVER_HOSTNAME"]="databricks-host"
-        ["DATABRICKS_TOKEN"]="databricks-token"
-        ["DATABRICKS_WAREHOUSE_ID"]="databricks-warehouse-id"
-        ["DATABRICKS_CATALOG"]="databricks-catalog"
-        ["DATABRICKS_SCHEMA"]="databricks-schema"
-        ["OAUTH_CLIENT_ID"]="oauth-client-id"
-        ["OAUTH_CLIENT_SECRET"]="oauth-client-secret"
-        ["OAUTH_REFRESH_TOKEN"]="oauth-refresh-token"
-        ["LAKEBASE_HOST"]="lakebase-host"
-        ["LAKEBASE_USER"]="lakebase-user"
-        ["LAKEBASE_PASSWORD"]="lakebase-password"
-        ["LAKEBASE_DATABASE"]="lakebase-database"
-    )
-    
     # Load .env file
     set -a
     source .env
     set +a
     
-    # Upload secrets
-    for env_var in "${!SECRET_MAP[@]}"; do
-        secret_key="${SECRET_MAP[$env_var]}"
-        secret_value="${!env_var}"
+    # Upload secrets one by one (compatible with all bash versions)
+    upload_secret() {
+        local env_var=$1
+        local secret_key=$2
+        local secret_value="${!env_var}"
         
         if [ -n "$secret_value" ]; then
             echo "Uploading secret: $secret_key"
@@ -131,11 +116,25 @@ if [ -f ".env" ]; then
         else
             echo -e "${YELLOW}⚠️  Skipping empty secret: $secret_key${NC}"
         fi
-    done
+    }
+    
+    # Upload all secrets
+    upload_secret "DATABRICKS_SERVER_HOSTNAME" "databricks-host"
+    upload_secret "DATABRICKS_TOKEN" "databricks-token"
+    upload_secret "DATABRICKS_WAREHOUSE_ID" "databricks-warehouse-id"
+    upload_secret "DATABRICKS_CATALOG" "databricks-catalog"
+    upload_secret "DATABRICKS_SCHEMA" "databricks-schema"
+    upload_secret "OAUTH_CLIENT_ID" "oauth-client-id"
+    upload_secret "OAUTH_CLIENT_SECRET" "oauth-client-secret"
+    upload_secret "OAUTH_REFRESH_TOKEN" "oauth-refresh-token"
+    upload_secret "LAKEBASE_HOST" "lakebase-host"
+    upload_secret "LAKEBASE_USER" "lakebase-user"
+    upload_secret "LAKEBASE_PASSWORD" "lakebase-password"
+    upload_secret "LAKEBASE_DATABASE" "lakebase-database"
 else
     echo -e "${YELLOW}⚠️  No .env file found. Skipping secret upload.${NC}"
     echo "Secrets must be configured manually:"
-    echo "  databricks secrets put-secret --scope $SECRET_SCOPE --key <key> --string-value <value>"
+    echo "  databricks secrets put-secret $SECRET_SCOPE <key>"
 fi
 
 echo ""

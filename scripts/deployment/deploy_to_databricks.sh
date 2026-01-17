@@ -215,22 +215,40 @@ databricks workspace mkdirs "$WORKSPACE_PATH" || {
 
 # Upload source code to workspace (excluding unnecessary files)
 echo "Uploading source code to workspace..."
-databricks workspace import-dir . "$WORKSPACE_PATH" \
-    --exclude-pattern="*.pyc" \
-    --exclude-pattern="__pycache__" \
-    --exclude-pattern=".git" \
-    --exclude-pattern=".pytest_cache" \
-    --exclude-pattern="*.egg-info" \
-    --exclude-pattern="node_modules" \
-    --exclude-pattern="dist" \
-    --exclude-pattern="build" \
-    --exclude-pattern=".env" \
-    --exclude-pattern="sqlpilot" \
-    --exclude-pattern="terminals" \
-    --overwrite || {
-    echo -e "${RED}❌ Failed to upload source code${NC}"
+
+# Create a temporary directory with only necessary files
+TEMP_DIR=$(mktemp -d)
+echo "Creating temporary upload directory: $TEMP_DIR"
+
+# Copy files to temp directory, excluding unnecessary ones
+rsync -av --progress \
+    --exclude='*.pyc' \
+    --exclude='__pycache__' \
+    --exclude='.git' \
+    --exclude='.pytest_cache' \
+    --exclude='*.egg-info' \
+    --exclude='node_modules' \
+    --exclude='dist' \
+    --exclude='build' \
+    --exclude='.env' \
+    --exclude='sqlpilot' \
+    --exclude='terminals' \
+    --exclude='.DS_Store' \
+    . "$TEMP_DIR/" || {
+    echo -e "${RED}❌ Failed to prepare source code${NC}"
+    rm -rf "$TEMP_DIR"
     exit 1
 }
+
+# Upload from temp directory to workspace
+databricks workspace import-dir "$TEMP_DIR" "$WORKSPACE_PATH" --overwrite || {
+    echo -e "${RED}❌ Failed to upload source code${NC}"
+    rm -rf "$TEMP_DIR"
+    exit 1
+}
+
+# Clean up temp directory
+rm -rf "$TEMP_DIR"
 
 echo -e "${GREEN}✅ Source code uploaded to $WORKSPACE_PATH${NC}"
 

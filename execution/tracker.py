@@ -305,6 +305,17 @@ class DeltaTableStorage(StorageBackend):
         data = record.to_dict()
         data['metadata'] = json.dumps(data['metadata'])
         
+        # Escape strings for SQL
+        sql_text_escaped = data['sql_text'].replace("'", "''")
+        error_message_escaped = data['error_message'].replace("'", "''") if data['error_message'] else None
+        
+        # Build field values
+        query_id_value = f"'{data['query_id']}'" if data['query_id'] else 'NULL'
+        started_at_value = f"TIMESTAMP '{data['started_at']}'" if data['started_at'] else 'NULL'
+        completed_at_value = f"TIMESTAMP '{data['completed_at']}'" if data['completed_at'] else 'NULL'
+        rows_affected_value = data['rows_affected'] if data['rows_affected'] is not None else 'NULL'
+        error_message_value = f"'{error_message_escaped}'" if error_message_escaped else 'NULL'
+        
         # Use MERGE for upsert
         merge_sql = f"""
         MERGE INTO {self.table_fqn} AS target
@@ -313,12 +324,12 @@ class DeltaTableStorage(StorageBackend):
           '{data['plan_id']}' AS plan_id,
           '{data['plan_version']}' AS plan_version,
           '{data['state']}' AS state,
-          '{data['sql_text'].replace("'", "''")}' AS sql_text,
-          {f"'{data['query_id']}'" if data['query_id'] else 'NULL'} AS query_id,
-          {f"TIMESTAMP '{data['started_at']}'" if data['started_at'] else 'NULL'} AS started_at,
-          {f"TIMESTAMP '{data['completed_at']}'" if data['completed_at'] else 'NULL'} AS completed_at,
-          {data['rows_affected'] if data['rows_affected'] is not None else 'NULL'} AS rows_affected,
-          {f"'{data['error_message'].replace("'", "''")}'" if data['error_message'] else 'NULL'} AS error_message,
+          '{sql_text_escaped}' AS sql_text,
+          {query_id_value} AS query_id,
+          {started_at_value} AS started_at,
+          {completed_at_value} AS completed_at,
+          {rows_affected_value} AS rows_affected,
+          {error_message_value} AS error_message,
           {data['retries']} AS retries,
           '{data['executor_user']}' AS executor_user,
           '{data['warehouse_id']}' AS warehouse_id,

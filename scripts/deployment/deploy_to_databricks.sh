@@ -220,7 +220,7 @@ else
     
     # Deploy app
     echo "Deploying app..."
-    databricks apps deploy "$APP_NAME" . || {
+    databricks apps deploy "$APP_NAME" --source-code-path . || {
         echo -e "${RED}❌ Deployment failed${NC}"
         exit 1
     }

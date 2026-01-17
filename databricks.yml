@@ -1,0 +1,46 @@
+# Databricks App Configuration for Lakehouse SQLPilot
+# Based on: https://docs.databricks.com/aws/en/dev-tools/databricks-apps/key-concepts
+
+# Bundle configuration for Databricks Apps
+bundle:
+  name: lakehouse-sqlpilot
+
+# Resources that the app needs
+resources:
+  apps:
+    lakehouse-sqlpilot:
+      name: lakehouse-sqlpilot
+      description: |
+        Governed control plane for production SQL in the Databricks Lakehouse.
+        Transform business intent into auditable, versioned, deterministic SQL execution.
+      
+      # Resource dependencies - configure during deployment
+      resources:
+        - name: sql_warehouse
+          description: SQL Warehouse for query execution
+          permission: CAN_USE
+        
+        - name: secret_scope
+          description: Secret scope for credentials
+          permission: READ
+      
+      # App configuration
+      config:
+        command:
+          - python
+          - -m
+          - uvicorn
+          - api.main:app
+          - --host
+          - "0.0.0.0"
+          - --port
+          - "8080"
+        
+        env:
+          - name: PYTHONPATH
+            value: "."
+          - name: APP_ENV
+            value: production
+          - name: SQLPILOT_REQUIRE_AUTH
+            value: "true"
+

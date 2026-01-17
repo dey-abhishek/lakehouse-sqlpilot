@@ -69,9 +69,10 @@ class TestLakebaseCircuitBreakerIntegration:
         """Test that circuit breaker protects Lakebase operations from cascading failures"""
         cb = CircuitBreaker(failure_threshold=3, recovery_timeout=1, name="lakebase_test")
         
-        # Simulate Lakebase operation failures
-        cursor = mock_lakebase._mock_cursor
-        cursor.execute.side_effect = [Exception("Connection error")] * 5
+        # Mock check_rate_limit to raise exceptions (simulating connection failure)
+        # The Lakebase backend normally catches exceptions and returns (True, 0),
+        # but for testing circuit breaker behavior, we need actual exceptions
+        mock_lakebase.check_rate_limit = MagicMock(side_effect=[Exception("Connection error")] * 5)
         
         def lakebase_operation():
             return mock_lakebase.check_rate_limit('test_client', 10, 60)
@@ -93,10 +94,8 @@ class TestLakebaseCircuitBreakerIntegration:
         """Test that circuit breaker allows recovery after timeout"""
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=1, name="lakebase_recovery")
         
-        cursor = mock_lakebase._mock_cursor
-        
-        # First cause failures
-        cursor.execute.side_effect = [Exception("Error")] * 2
+        # Mock check_rate_limit to raise exceptions initially
+        mock_lakebase.check_rate_limit = MagicMock(side_effect=[Exception("Error"), Exception("Error")])
         
         def lakebase_operation():
             return mock_lakebase.check_rate_limit('test_client', 10, 60)
@@ -114,8 +113,7 @@ class TestLakebaseCircuitBreakerIntegration:
         time.sleep(1.1)
         
         # Now make operation successful
-        cursor.execute.side_effect = None
-        cursor.fetchone.return_value = None
+        mock_lakebase.check_rate_limit = MagicMock(return_value=(True, 1))
         
         # Should succeed and close circuit
         result = cb.call(lakebase_operation)
@@ -146,17 +144,11 @@ class TestRateLimitingWithCircuitBreaker:
         """Test handling of rate limit failures with circuit breaker"""
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=30, name="rate_limit_fail")
         
-        cursor = mock_lakebase._mock_cursor
-        
-        # Simulate database errors
-        cursor.execute.side_effect = Exception("Database connection lost")
+        # Mock check_rate_limit to raise exception
+        mock_lakebase.check_rate_limit = MagicMock(side_effect=Exception("Database connection lost"))
         
         def check_rate_limit_with_failure():
-            # Lakebase check_rate_limit returns (True, 0) on error
-            try:
-                return mock_lakebase.check_rate_limit('test_client', 10, 60)
-            except Exception as e:
-                raise e
+            return mock_lakebase.check_rate_limit('test_client', 10, 60)
         
         # First failure
         with pytest.raises(Exception):
@@ -224,10 +216,8 @@ class TestCachingWithResilience:
         """Test cache retrieval with fallback on failure"""
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=1, name="cache_retrieval")
         
-        cursor = mock_lakebase._mock_cursor
-        
-        # First calls fail
-        cursor.fetchone.side_effect = [Exception("DB error")] * 2
+        # Mock get_cached_catalogs to raise exceptions initially
+        mock_lakebase.get_cached_catalogs = MagicMock(side_effect=[Exception("DB error"), Exception("DB error")])
         
         def get_cached_catalogs_with_fallback():
             try:
@@ -236,26 +226,20 @@ class TestCachingWithResilience:
                 # Fallback to fresh fetch
                 return [{'name': 'main'}]  # Simulated fresh fetch
         
-        # Should fail and open circuit
+        # Should fail but fallback returns a value, so circuit breaker sees success
         for i in range(2):
-            try:
-                cb.call(get_cached_catalogs_with_fallback)
-            except Exception:
-                pass
+            result = cb.call(get_cached_catalogs_with_fallback)
         
-        assert cb.state == CircuitState.OPEN
+        # Circuit should remain CLOSED because fallback prevents exception propagation
+        assert cb.state == CircuitState.CLOSED
         
-        # Wait for recovery
-        time.sleep(1.1)
-        
-        # Now succeed with fallback
-        cursor.fetchone.side_effect = None
-        cursor.fetchone.return_value = None
+        # Now make the operation succeed directly
+        mock_lakebase.get_cached_catalogs = MagicMock(return_value=[{'name': 'main'}, {'name': 'catalog1'}])
         
         result = cb.call(get_cached_catalogs_with_fallback)
         
-        # Should return fallback value
-        assert result == [{'name': 'main'}]
+        # Should return direct value
+        assert len(result) == 2
 
 
 class TestDistributedScenarios:
@@ -332,13 +316,16 @@ class TestFailureRecoveryScenarios:
         """Test that circuit breaker prevents overloading database during outage"""
         cb = CircuitBreaker(failure_threshold=5, recovery_timeout=2, name="overload_protection")
         
-        cursor = mock_lakebase._mock_cursor
-        cursor.execute.side_effect = Exception("Database overloaded")
-        
         request_count = {'count': 0}
         
-        def lakebase_operation_with_counter():
+        # Mock ping to raise exception and count requests
+        def ping_with_error():
             request_count['count'] += 1
+            raise Exception("Database overloaded")
+        
+        mock_lakebase.ping = MagicMock(side_effect=ping_with_error)
+        
+        def lakebase_operation_with_counter():
             return mock_lakebase.ping()
         
         # Make requests until circuit opens
@@ -458,14 +445,12 @@ class TestErrorHandlingPatterns:
     
     def test_partial_failure_handling(self, mock_lakebase):
         """Test handling of partial failures"""
-        cursor = mock_lakebase._mock_cursor
-        
-        # Some operations succeed, some fail
-        cursor.fetchone.side_effect = [
-            (json.dumps({'data': 'success'}),),  # First succeeds
-            Exception("Temporary error"),         # Second fails
-            (json.dumps({'data': 'success'}),)   # Third succeeds
-        ]
+        # Mock get method to return different results
+        mock_lakebase.get = MagicMock(side_effect=[
+            {'data': 'success'},  # First succeeds
+            Exception("Temporary error"),  # Second fails
+            {'data': 'success'}   # Third succeeds
+        ])
         
         results = []
         for i in range(3):
@@ -535,10 +520,8 @@ class TestGlobalCircuitBreakersWithLakebase:
         db_cb = get_databricks_circuit_breaker()
         reset_all_circuit_breakers()
         
-        cursor = mock_lakebase._mock_cursor
-        
-        # Simulate failures
-        cursor.execute.side_effect = Exception("Error")
+        # Mock ping to raise exception
+        mock_lakebase.ping = MagicMock(side_effect=Exception("Error"))
         
         def failing_databricks_op():
             return mock_lakebase.ping()

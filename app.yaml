@@ -1,0 +1,68 @@
+# Databricks App Configuration
+# This file configures the SQLPilot app for deployment on Databricks Apps
+
+name: lakehouse-sqlpilot
+display_name: Lakehouse SQLPilot
+
+# App version
+version: 1.0.0
+
+# Description
+description: >
+  Governed control plane for production SQL in the Databricks Lakehouse.
+  Transform business intent into auditable, versioned, deterministic SQL execution.
+
+# Entry point for the application
+command:
+  - python
+  - -m
+  - uvicorn
+  - api.main:app
+  - --host
+  - "0.0.0.0"
+  - --port
+  - "8080"
+
+# Environment specification
+env:
+  - name: PYTHONPATH
+    value: /app
+  - name: APP_ENV
+    value: production
+
+# Resources
+resources:
+  cpu: "1"
+  memory: "2Gi"
+
+# Ports
+ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+
+# Health checks
+health_check:
+  http:
+    path: /health
+    port: 8080
+  initial_delay_seconds: 30
+  period_seconds: 10
+  timeout_seconds: 5
+
+# Service account (for Unity Catalog access)
+service_account:
+  managed_identity: true
+
+# Permissions
+permissions:
+  - unity_catalog:
+      privilege: USE_CATALOG
+      catalog: "*"
+  - unity_catalog:
+      privilege: USE_SCHEMA
+      schema: "*"
+  - warehouses:
+      privilege: CAN_USE
+      warehouse: "*"
+

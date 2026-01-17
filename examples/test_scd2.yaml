@@ -1,0 +1,68 @@
+schema_version: "1.0"
+plan_metadata:
+  plan_id: "test-002-scd2"
+  plan_name: "test_customer_scd2"
+  description: "Test SCD2 pattern for customer dimension"
+  owner: "test@databricks.com"
+  created_at: "2026-01-16T00:00:00Z"
+  version: "1.0.0"
+  tags:
+    environment: "test"
+    workspace: "e2-dogfood-staging"
+    pattern: "scd2"
+
+pattern:
+  type: "SCD2"
+
+source:
+  catalog: "lakehouse-sqlpilot"
+  schema: "lakehouse-sqlpilot-schema"
+  table: "customer_current"
+  columns:
+    - "customer_id"
+    - "first_name"
+    - "last_name"
+    - "email"
+    - "phone"
+    - "customer_status"
+
+target:
+  catalog: "lakehouse-sqlpilot"
+  schema: "lakehouse-sqlpilot-schema"
+  table: "customer_dim"
+  write_mode: "merge"
+  partition_by: ["valid_from"]
+  cluster_by: ["customer_id"]
+
+pattern_config:
+  business_keys: ["customer_id"]
+  effective_date_column: "valid_from"
+  end_date_column: "valid_to"
+  current_flag_column: "is_current"
+  end_date_default: "9999-12-31 23:59:59"
+  compare_columns:
+    - "first_name"
+    - "last_name"
+    - "email"
+    - "phone"
+    - "customer_status"
+
+execution_config:
+  warehouse_id: "592f1f39793f7795"  # Databricks SQL Warehouse
+  timeout_seconds: 3600
+  max_retries: 3
+  retry_backoff_seconds: 60
+
+schedule:
+  type: "manual"
+
+validation_rules:
+  pre_execution:
+    - type: "no_duplicate_business_keys"
+    - type: "no_null_business_keys"
+    - type: "row_count_min"
+      value: 1
+  post_execution:
+    - type: "single_current_per_key"
+    - type: "no_overlapping_dates"
+

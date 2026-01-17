@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+sqlpilot/
+venv/
+env/
+ENV/
+.venv/
+
+# Environment variables & Credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (not needed in container)
+*.md
+!README.md
+docs/
+
+# Tests (not needed in container)
+tests/
+*.test.tsx
+*.spec.ts
+
+# Node modules (UI dependencies)
+node_modules/
+ui/plan-editor/node_modules/
+
+# Backup files
+*.backup
+backup/
+
+# Temporary files
+*.tmp
+*.bak
+.~*
+temp/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+

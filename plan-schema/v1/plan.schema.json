@@ -1,0 +1,275 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://databricks.com/schemas/sqlpilot/plan/v1.0.0",
+  "title": "Lakehouse SQLPilot Plan Schema",
+  "description": "Declarative plan schema for governed SQL execution in Databricks Lakehouse",
+  "type": "object",
+  "required": ["schema_version", "plan_metadata", "pattern", "source", "target", "pattern_config", "execution_config"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"],
+      "description": "Schema version for compatibility tracking"
+    },
+    "plan_metadata": {
+      "type": "object",
+      "required": ["plan_id", "plan_name", "owner", "created_at", "version"],
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for the plan"
+        },
+        "plan_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "minLength": 3,
+          "maxLength": 64,
+          "description": "Human-readable plan name (lowercase, alphanumeric, underscores)"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Detailed description of plan purpose"
+        },
+        "owner": {
+          "type": "string",
+          "format": "email",
+          "description": "Owner email address"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Plan creation timestamp (ISO 8601)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version (major.minor.patch)"
+        },
+        "tags": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Key-value tags for organization"
+        }
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "INCREMENTAL_APPEND",
+            "FULL_REPLACE",
+            "MERGE_UPSERT",
+            "SCD2"
+          ],
+          "description": "SQL generation pattern type"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["catalog", "schema", "table"],
+      "properties": {
+        "catalog": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Source Unity Catalog catalog name"
+        },
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Source schema name"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Source table name"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]+$"
+          },
+          "description": "Explicit list of columns to include (optional, defaults to *)"
+        },
+        "filter": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Optional WHERE clause (without WHERE keyword)"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["catalog", "schema", "table", "write_mode"],
+      "properties": {
+        "catalog": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Target Unity Catalog catalog name"
+        },
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Target schema name"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Target table name"
+        },
+        "write_mode": {
+          "type": "string",
+          "enum": ["append", "overwrite", "merge"],
+          "description": "Delta Lake write mode"
+        },
+        "partition_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]+$"
+          },
+          "description": "Partition columns"
+        },
+        "cluster_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]+$"
+          },
+          "description": "Clustering columns for Delta tables"
+        }
+      }
+    },
+    "pattern_config": {
+      "type": "object",
+      "description": "Pattern-specific configuration",
+      "properties": {
+        "watermark_column": {
+          "type": "string"
+        },
+        "watermark_type": {
+          "type": "string",
+          "enum": ["timestamp", "date", "numeric"]
+        },
+        "watermark_initial_value": {
+          "type": "string"
+        },
+        "business_keys": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "effective_date_column": {
+          "type": "string"
+        },
+        "end_date_column": {
+          "type": "string"
+        },
+        "current_flag_column": {
+          "type": "string"
+        },
+        "end_date_default": {
+          "type": "string"
+        },
+        "compare_columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "merge_keys": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "update_columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["manual", "cron", "event"],
+          "description": "Schedule type"
+        },
+        "cron_expression": {
+          "type": "string",
+          "description": "Cron expression (required if type=cron)"
+        },
+        "timezone": {
+          "type": "string",
+          "default": "UTC",
+          "description": "Timezone for cron schedule"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether schedule is enabled"
+        }
+      }
+    },
+    "execution_config": {
+      "type": "object",
+      "required": ["warehouse_id"],
+      "properties": {
+        "warehouse_id": {
+          "type": "string",
+          "description": "Databricks SQL Warehouse ID for execution"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "default": 3600,
+          "description": "Query timeout in seconds"
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 3,
+          "description": "Maximum number of retry attempts"
+        },
+        "retry_delay_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 600,
+          "default": 60,
+          "description": "Delay between retry attempts"
+        }
+      }
+    },
+    "validation_rules": {
+      "type": "object",
+      "properties": {
+        "check_source_not_empty": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fail if source is empty"
+        },
+        "check_schema_compatibility": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verify schema compatibility between source and target"
+        },
+        "max_rows_to_process": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of rows to process (safety limit)"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

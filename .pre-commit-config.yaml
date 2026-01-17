@@ -1,0 +1,65 @@
+# Pre-commit Configuration
+# Install: pip install pre-commit && pre-commit install
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+        description: Detects private keys (.pem, .key files)
+      - id: check-case-conflict
+      - id: mixed-line-ending
+
+  # Detect secrets and credentials
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  # Python code formatting
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3
+
+  # Python import sorting
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  # Python linting
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: ['--max-line-length=100', '--ignore=E203,W503']
+        additional_dependencies: [flake8-docstrings]
+
+  # Check for credentials in code
+  - repo: local
+    hooks:
+      - id: check-credentials
+        name: Check for hardcoded credentials
+        entry: bash -c 'if git diff --cached | grep -iE "(token|password|secret|api_key|dapi[0-9a-f]{32})" ; then echo "❌ Potential credentials detected! Remove them before committing." && exit 1; fi'
+        language: system
+        pass_filenames: false
+
+      - id: check-env-file
+        name: Prevent .env file commit
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^\.env$" ; then echo "❌ .env file should not be committed!" && exit 1; fi'
+        language: system
+        pass_filenames: false
+

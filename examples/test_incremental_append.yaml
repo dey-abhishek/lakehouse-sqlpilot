@@ -1,0 +1,51 @@
+schema_version: "1.0"
+plan_metadata:
+  plan_id: "test-001-incremental-append"
+  plan_name: "test_customer_events_incremental"
+  description: "Test incremental append of customer events"
+  owner: "test@databricks.com"
+  created_at: "2026-01-16T00:00:00Z"
+  version: "1.0.0"
+  tags:
+    environment: "test"
+    workspace: "e2-dogfood-staging"
+
+pattern:
+  type: "INCREMENTAL_APPEND"
+
+source:
+  catalog: "lakehouse-sqlpilot"
+  schema: "lakehouse-sqlpilot-schema"
+  table: "customer_events_raw"
+
+target:
+  catalog: "lakehouse-sqlpilot"
+  schema: "lakehouse-sqlpilot-schema"
+  table: "customer_events_processed"
+  write_mode: "append"
+  partition_by: ["event_timestamp"]
+
+pattern_config:
+  watermark_column: "event_timestamp"
+  watermark_type: "timestamp"
+  watermark_initial_value: "1970-01-01 00:00:00"
+
+execution_config:
+  warehouse_id: "592f1f39793f7795"  # Databricks SQL Warehouse
+  timeout_seconds: 1800
+  max_retries: 3
+  retry_backoff_seconds: 30
+
+schedule:
+  type: "manual"
+
+validation_rules:
+  pre_execution:
+    - type: "row_count_min"
+      value: 0
+    - type: "schema_match"
+      value: ["customer_id", "event_type", "event_timestamp"]
+  post_execution:
+    - type: "row_count_change_max_percent"
+      value: 200
+

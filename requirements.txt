@@ -1,0 +1,127 @@
+# ============================================================================
+# Lakehouse SQLPilot - Production Requirements
+# ============================================================================
+# 
+# This file contains all dependencies for the Lakehouse SQLPilot application
+# 
+# Install: pip install -r requirements.txt
+# ============================================================================
+
+# ============================================================================
+# Core Framework
+# ============================================================================
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# ============================================================================
+# Databricks Integration
+# ============================================================================
+databricks-sdk==0.18.0
+databricks-sql-connector==3.0.2
+pyarrow==14.0.2
+
+# ============================================================================
+# Security & Authentication
+# ============================================================================
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+PyJWT==2.8.0
+cryptography==42.0.0
+
+# ============================================================================
+# Data Validation & Processing
+# ============================================================================
+jsonschema==4.20.0
+python-dotenv==1.0.0
+
+# ============================================================================
+# Secrets Management
+# ============================================================================
+azure-keyvault-secrets==4.7.0
+azure-identity==1.15.0
+boto3==1.34.22
+
+# ============================================================================
+# Logging & Monitoring
+# ============================================================================
+structlog==24.1.0
+colorama==0.4.6
+prometheus-client==0.19.0
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-instrumentation-fastapi==0.43b0
+
+# ============================================================================
+# HTTP Clients
+# ============================================================================
+requests==2.31.0
+httpx==0.26.0
+
+# ============================================================================
+# CORS & Middleware
+# ============================================================================
+python-cors==1.0.0
+
+# ============================================================================
+# Testing
+# ============================================================================
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-asyncio==0.23.3
+pytest-env==1.1.3
+pytest-mock==3.12.0
+pytest-timeout==2.2.0
+pytest-flaky==3.8.1
+
+# ============================================================================
+# Development Tools
+# ============================================================================
+black==24.1.1
+pylint==3.0.3
+mypy==1.8.0
+isort==5.13.2
+
+# ============================================================================
+# Scalability & Resilience (DATABRICKS-NATIVE)
+# ============================================================================
+
+# Lakebase Postgres for distributed state management (Databricks-native)
+# Reference: https://docs.databricks.com/aws/en/oltp/
+psycopg2-binary==2.9.9  # PostgreSQL adapter
+# Note: Use psycopg2 (not psycopg2-binary) in production for better performance
+
+# Connection pooling
+sqlalchemy==2.0.25
+
+# Circuit breaker pattern
+pybreaker==1.0.1
+
+# Async caching
+cachetools==5.3.2
+aiocache==0.12.2
+
+# Async task queue (optional, for background jobs)
+# celery==5.3.4  # Optional: Uncomment if needed
+# flower==2.0.1  # Celery monitoring UI
+
+# Health checks & metrics
+py-healthcheck==1.10.1
+
+# Rate limiting
+limits==3.7.0
+
+# ============================================================================
+# Database (for execution tracking)
+# ============================================================================
+sqlalchemy-databricks==0.2.0
+alembic==1.13.1  # Database migrations
+
+# ============================================================================
+# Additional Utilities
+# ============================================================================
+tenacity==8.2.3  # Advanced retry logic
+backoff==2.2.1  # Backoff decorators
+limits==3.7.0  # Rate limiting library

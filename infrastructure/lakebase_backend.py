@@ -18,6 +18,15 @@ from contextlib import contextmanager
 
 logger = structlog.get_logger()
 
+# Try to import Lakebase OAuth manager (optional)
+try:
+    from infrastructure.lakebase_oauth import get_lakebase_password
+    LAKEBASE_OAUTH_AVAILABLE = True
+except ImportError:
+    LAKEBASE_OAUTH_AVAILABLE = False
+    logger.warning("lakebase_oauth_not_available", 
+                   message="OAuth auto-refresh not available for Lakebase")
+
 
 class LakebaseBackend:
     """
@@ -45,17 +54,19 @@ class LakebaseBackend:
                  database: str = "sqlpilot_state",
                  user: Optional[str] = None,
                  password: Optional[str] = None,
+                 use_oauth: bool = True,
                  min_connections: int = 2,
                  max_connections: int = 20):
         """
         Initialize Lakebase backend with connection pooling
         
         Args:
-            host: Lakebase Postgres host (e.g., your-project.cloud.databricks.com)
+            host: Lakebase Postgres host
             port: Database port (default 5432)
             database: Database name
             user: Database user
-            password: Database password
+            password: Database password (or will use OAuth if use_oauth=True)
+            use_oauth: Use OAuth auto-refresh for password (recommended)
             min_connections: Minimum connections in pool
             max_connections: Maximum connections in pool
         """
@@ -64,12 +75,27 @@ class LakebaseBackend:
         self.port = port
         self.database = database
         self.user = user or os.getenv("LAKEBASE_USER")
-        self.password = password or os.getenv("LAKEBASE_PASSWORD")
+        self.use_oauth = use_oauth and LAKEBASE_OAUTH_AVAILABLE
+        
+        # Get password: OAuth (preferred) or static
+        if self.use_oauth:
+            try:
+                self.password = get_lakebase_password()
+                logger.info("lakebase_using_oauth_password", 
+                           message="OAuth auto-refresh enabled for Lakebase")
+            except Exception as e:
+                logger.warning("lakebase_oauth_failed_fallback_to_static",
+                              error=str(e))
+                self.password = password or os.getenv("LAKEBASE_PASSWORD")
+                self.use_oauth = False
+        else:
+            self.password = password or os.getenv("LAKEBASE_PASSWORD")
         
         if not all([self.host, self.user, self.password]):
             raise ValueError(
                 "Lakebase credentials not configured. "
-                "Set LAKEBASE_HOST, LAKEBASE_USER, LAKEBASE_PASSWORD"
+                "Set LAKEBASE_HOST, LAKEBASE_USER, LAKEBASE_PASSWORD "
+                "or configure OAuth (OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN)"
             )
         
         # Create connection pool
@@ -857,6 +883,58 @@ class LakebaseBackend:
             logger.info("lakebase_connections_closed")
         except Exception as e:
             logger.error("lakebase_close_error", error=str(e))
+    
+    def refresh_oauth_password(self):
+        """
+        Refresh OAuth password and reconnect pool
+        
+        This method should be called periodically (every ~45 min) to refresh
+        the OAuth token used as the database password.
+        
+        Note: This will close existing connections and create new ones.
+              Use during maintenance windows or low-traffic periods if possible.
+        """
+        if not self.use_oauth:
+            logger.warning("lakebase_refresh_skipped", 
+                          message="OAuth not enabled for this instance")
+            return
+        
+        if not LAKEBASE_OAUTH_AVAILABLE:
+            logger.error("lakebase_oauth_not_available")
+            return
+        
+        try:
+            logger.info("refreshing_lakebase_connection_with_new_oauth_token")
+            
+            # Get fresh OAuth token
+            new_password = get_lakebase_password()
+            
+            # Store pool config
+            min_conn = self.pool.minconn
+            max_conn = self.pool.maxconn
+            
+            # Close existing pool
+            if hasattr(self, 'pool') and self.pool:
+                self.pool.closeall()
+            
+            # Create new pool with fresh token
+            self.password = new_password
+            self.pool = ThreadedConnectionPool(
+                min_conn,
+                max_conn,
+                host=self.host,
+                port=self.port,
+                dbname=self.database,
+                user=self.user,
+                password=self.password,
+                sslmode='require'
+            )
+            
+            logger.info("lakebase_connection_refreshed_with_new_token")
+            
+        except Exception as e:
+            logger.error("lakebase_oauth_refresh_failed", error=str(e))
+            raise
 
 
 # Global instance (lazy initialization)

@@ -25,12 +25,22 @@ try:
         get_lakebase_backend,
         close_lakebase
     )
+    from .lakebase_oauth import (
+        LakebaseOAuthManager,
+        get_lakebase_oauth_manager,
+        get_lakebase_password,
+        stop_lakebase_oauth_manager
+    )
     LAKEBASE_AVAILABLE = True
 except ImportError:
     LAKEBASE_AVAILABLE = False
     LakebaseBackend = None
     get_lakebase_backend = None
     close_lakebase = None
+    LakebaseOAuthManager = None
+    get_lakebase_oauth_manager = None
+    get_lakebase_password = None
+    stop_lakebase_oauth_manager = None
 
 __all__ = [
     # Circuit Breaker (always available)
@@ -43,10 +53,17 @@ __all__ = [
     "reset_all_circuit_breakers",
     "get_all_circuit_breaker_states",
     
-    # Lakebase (conditionally available)
+    # Lakebase Backend (conditionally available)
     "LakebaseBackend",
     "get_lakebase_backend",
     "close_lakebase",
+    
+    # Lakebase OAuth (conditionally available)
+    "LakebaseOAuthManager",
+    "get_lakebase_oauth_manager",
+    "get_lakebase_password",
+    "stop_lakebase_oauth_manager",
+    
     "LAKEBASE_AVAILABLE",
 ]
 

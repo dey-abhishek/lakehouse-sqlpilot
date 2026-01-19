@@ -19,7 +19,7 @@ Lakehouse SQLPilot bridges the gap between exploratory data understanding (Genie
 - ✅ Comprehensive test suite (416 tests passing!)
 
 **Application Type:** Data Platform  
-**Architecture:** React UI + FastAPI Backend + PostgreSQL Registry
+**Architecture:** React UI + FastAPI Backend + Lakebase Registry
 
 ---
 

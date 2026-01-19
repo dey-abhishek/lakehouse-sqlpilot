@@ -149,6 +149,17 @@ Business Analysts, Data Engineers, Data Stewards, and Platform Admins interact w
 
 #### **Architecture Diagram**
 
+![SQLPilot Architecture](docs/architecture.png)
+
+> **📐 Interactive Diagram:**  
+> Open [`docs/architecture.drawio`](docs/architecture.drawio) in [draw.io](https://app.diagrams.net) to edit this diagram.
+>
+> **🖼️ PNG Not Showing?**  
+> The PNG needs to be exported from the draw.io file. See [`docs/EXPORT_PNG_GUIDE.md`](docs/EXPORT_PNG_GUIDE.md) for instructions.
+
+<details>
+<summary>📊 Click here for simplified Mermaid diagram (if PNG doesn't load)</summary>
+
 ```mermaid
 graph TB
     subgraph users["👥 USER LAYER"]
@@ -187,7 +198,7 @@ graph TB
     style governance fill:#E8F5E9,stroke:#2E7D32,stroke-width:3px
 ```
 
-> **💡 Tip:** For a detailed, professional architecture diagram, open [`docs/architecture.drawio`](docs/architecture.drawio) in draw.io!
+</details>
 
 ### Benefits Summary
 

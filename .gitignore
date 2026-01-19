@@ -144,6 +144,7 @@ docs/
 !docs/architecture.drawio
 !docs/architecture.png
 !docs/ARCHITECTURE.md
+!docs/EXPORT_PNG_GUIDE.md
 CONTRIBUTING.md
 SECURITY.md
 IMPLEMENTATION_*.md

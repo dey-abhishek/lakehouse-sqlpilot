@@ -54,6 +54,7 @@ function PlanEditor() {
     // Pattern-specific fields
     watermark_column: '',
     watermark_type: 'timestamp',
+    match_columns: '',
     merge_keys: '',
     business_keys: '',
     effective_date_column: 'effective_date',
@@ -125,6 +126,7 @@ function PlanEditor() {
         config: existingPlan.pattern_config || existingPlan.config || {},
         watermark_column: existingPlan.pattern_config?.watermark_column || '',
         watermark_type: existingPlan.pattern_config?.watermark_type || 'timestamp',
+        match_columns: existingPlan.pattern_config?.match_columns?.join(',') || '',
         merge_keys: existingPlan.pattern_config?.merge_keys?.join(',') || '',
         business_keys: existingPlan.pattern_config?.business_keys?.join(',') || '',
         effective_date_column: existingPlan.pattern_config?.effective_date_column || 'effective_date',
@@ -300,12 +302,16 @@ function PlanEditor() {
       
       // Configure based on pattern type
       switch (plan.pattern_type) {
-        case 'INCREMENTAL_APPEND':
-          patternConfig = {
-            watermark_column: plan.watermark_column || (plan.config as any)?.watermark_column,
-            watermark_type: plan.watermark_type || (plan.config as any)?.watermark_type || 'timestamp',
-          }
-          break
+      case 'INCREMENTAL_APPEND':
+        patternConfig = {
+          watermark_column: plan.watermark_column || (plan.config as any)?.watermark_column,
+          watermark_type: plan.watermark_type || (plan.config as any)?.watermark_type || 'timestamp',
+        }
+        // Add match_columns if provided (for merge mode)
+        if (plan.match_columns) {
+          patternConfig.match_columns = plan.match_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        }
+        break
           
         case 'MERGE_UPSERT':
           patternConfig = {
@@ -455,6 +461,10 @@ function PlanEditor() {
         patternConfig = {
           watermark_column: plan.watermark_column || (plan.config as any)?.watermark_column,
           watermark_type: plan.watermark_type || (plan.config as any)?.watermark_type || 'timestamp',
+        }
+        // Add match_columns if provided (for merge mode)
+        if (plan.match_columns) {
+          patternConfig.match_columns = plan.match_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
         }
         break
         
@@ -883,6 +893,20 @@ function PlanEditor() {
                   <MenuItem value="integer">Integer</MenuItem>
                 </TextField>
               </Grid>
+              
+              {plan.write_mode === 'merge' && (
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Match Columns *"
+                    value={plan.match_columns}
+                    onChange={handleChange('match_columns')}
+                    helperText="Comma-separated columns to match on for MERGE (e.g., customer_id, order_id)"
+                    placeholder="customer_id"
+                    required
+                  />
+                </Grid>
+              )}
             </>
           )}
 

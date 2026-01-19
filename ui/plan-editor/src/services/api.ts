@@ -17,10 +17,10 @@ const getApiBaseUrl = () => {
     return '/api/v1'
   }
   
-  // In development, use localhost with same protocol as frontend
+  // In development, use localhost backend (default port 8001)
   // This allows local dev with http while prod uses https
   const protocol = window.location.protocol
-  return `${protocol}//localhost:8080/api/v1`
+  return `${protocol}//localhost:8001/api/v1`
 }
 
 const API_BASE_URL = getApiBaseUrl()
@@ -78,7 +78,13 @@ export interface PreviewResult {
 
 export interface ExecutionResult {
   success: boolean
-  execution_id: string
+  execution_id?: string // Single statement execution (legacy)
+  execution_ids?: Array<{
+    statement_number: number
+    statement_id: string
+    status: string
+  }> // Multi-statement execution
+  total_statements?: number
   message: string
 }
 
@@ -142,6 +148,9 @@ class APIService {
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
         ...options.headers,
       },
     }
@@ -150,8 +159,16 @@ class APIService {
       const response = await fetch(url, config)
       
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: response.statusText }))
-        throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`)
+        const errorData = await response.json().catch(() => ({ detail: response.statusText }))
+        // Preserve the full error structure for better error messages
+        const error: any = new Error(
+          typeof errorData.detail === 'string' 
+            ? errorData.detail 
+            : JSON.stringify(errorData.detail)
+        )
+        error.detail = errorData.detail
+        error.status = response.status
+        throw error
       }
 
       return await response.json()
@@ -172,7 +189,9 @@ class APIService {
   }
 
   async getPlan(planId: string): Promise<Plan> {
-    return this.request<Plan>(`/plans/${planId}`)
+    // Add cache-busting query parameter to ensure fresh data
+    const cacheBuster = `_=${Date.now()}`
+    return this.request<Plan>(`/plans/${planId}?${cacheBuster}`)
   }
 
   async savePlan(plan: Plan, user: string): Promise<{ success: boolean; plan_id: string; message: string }> {
@@ -273,6 +292,37 @@ class APIService {
   // Patterns
   async listPatterns(): Promise<{ patterns: string[] }> {
     return this.request<{ patterns: string[] }>('/patterns')
+  }
+
+  // Table Operations
+  async checkTableExists(catalog: string, schema: string, table: string, warehouseId: string): Promise<{ exists: boolean; table: string }> {
+    return this.request<{ exists: boolean; table: string }>('/tables/check', {
+      method: 'POST',
+      body: JSON.stringify({ catalog, schema, table, warehouse_id: warehouseId }),
+    })
+  }
+
+  async createTable(planId: string, warehouseId: string): Promise<{ success: boolean; table: string; statement_id: string; message: string }> {
+    return this.request<{ success: boolean; table: string; statement_id: string; message: string }>('/tables/create', {
+      method: 'POST',
+      body: JSON.stringify({ plan_id: planId, warehouse_id: warehouseId }),
+    })
+  }
+
+  // Execution History
+  async listExecutions(params?: { status?: string; executor_user?: string; limit?: number; offset?: number }): Promise<{ executions: any[]; total: number }> {
+    const queryParams = new URLSearchParams()
+    if (params?.status) queryParams.append('status', params.status)
+    if (params?.executor_user) queryParams.append('executor_user', params.executor_user)
+    if (params?.limit) queryParams.append('limit', params.limit.toString())
+    if (params?.offset) queryParams.append('offset', params.offset.toString())
+    
+    const url = `/executions${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
+    return this.request<{ executions: any[]; total: number }>(url)
+  }
+
+  async getExecution(executionId: number): Promise<any> {
+    return this.request(`/executions/${executionId}`)
   }
 
   // Health Check

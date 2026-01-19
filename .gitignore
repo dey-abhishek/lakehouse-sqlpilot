@@ -135,12 +135,15 @@ preflight_check.py
 scripts/oauth_*.py
 scripts/security/oauth_*.py
 
-# Documentation (except README.md)
-# Keep README.md in git, ignore all other docs to prevent info leakage
+# Documentation (except README.md and architecture)
+# Keep README.md and architecture diagrams in git, ignore other docs to prevent info leakage
 *.md
 !README.md
 !LICENSE.md
 docs/
+!docs/architecture.drawio
+!docs/architecture.png
+!docs/ARCHITECTURE.md
 CONTRIBUTING.md
 SECURITY.md
 IMPLEMENTATION_*.md

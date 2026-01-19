@@ -109,86 +109,85 @@ Benefit: Reliable, repeatable data pipelines
 
 ### Architecture Pattern
 
-```
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                             👥 USER LAYER                                 ║
-║                   Business Analysts  •  Data Engineers                    ║
-╚════════════════════════════════════╤══════════════════════════════════════╝
-                                     │
-                       ┌─────────────┴──────────────┐
-                       │   Plan Definition (YAML)   │
-                       │   JSON Schema Validation   │
-                       └─────────────┬──────────────┘
-                                     ▼
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                      🎛️  SQLPILOT CONTROL PLANE                           ║
-║                                                                           ║
-║  ┌─────────────────┐   ┌──────────────────┐   ┌────────────────────┐   ║
-║  │   📝 Plan UI     │   │  🔧 SQL Compiler │   │  🤖 AI Agents      │   ║
-║  │                  │   │                  │   │                    │   ║
-║  │ • React Editor   │   │ • Pattern Engine │   │ • Plan Suggestion  │   ║
-║  │ • Plan Builder   │   │ • SQL Generator  │   │ • Validation       │   ║
-║  │ • Live Preview   │   │ • Guardrails     │   │ • Optimization     │   ║
-║  └─────────────────┘   └──────────────────┘   └────────────────────┘   ║
-║                                                                           ║
-║  ┌─────────────────────────────────────────────────────────────────────┐ ║
-║  │                    📋 Plan Registry (Lakebase)                      │ ║
-║  │           Versioned Plans • Execution History • Metadata            │ ║
-║  └─────────────────────────────────────────────────────────────────────┘ ║
-╚════════════════════════════════════╤══════════════════════════════════════╝
-                                     │
-                       ┌─────────────┴──────────────┐
-                       │   Generated SQL (Audited)  │
-                       │   Execution Context        │
-                       └─────────────┬──────────────┘
-                                     ▼
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                       ⚡ EXECUTION PLANE                                   ║
-║                                                                           ║
-║  ┌──────────────────────────────────────────────────────────────────┐   ║
-║  │              🏭 Databricks SQL Warehouse                          │   ║
-║  │     • Serverless Compute  • Query Execution  • Result Cache       │   ║
-║  └──────────────────────────────────────────────────────────────────┘   ║
-║                                                                           ║
-║  ┌──────────────────────────────────────────────────────────────────┐   ║
-║  │              📊 Execution Tracking & Monitoring                   │   ║
-║  │     • Real-time Status  • Error Details  • Performance Metrics    │   ║
-║  └──────────────────────────────────────────────────────────────────┘   ║
-╚════════════════════════════════════╤══════════════════════════════════════╝
-                                     │
-                       ┌─────────────┴──────────────┐
-                       │   Data Modifications       │
-                       │   Lineage Capture          │
-                       └─────────────┬──────────────┘
-                                     ▼
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                      🔒 GOVERNANCE & DATA LAYER                           ║
-║                                                                           ║
-║  ┌──────────────────────────────────────────────────────────────────┐   ║
-║  │                    🏛️  Unity Catalog                              │   ║
-║  │     • Catalogs & Schemas  • Table Management  • Permissions       │   ║
-║  └──────────────────────────────────────────────────────────────────┘   ║
-║                                                                           ║
-║  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────┐ ║
-║  │  📈 Data Lineage    │  │  📝 Audit Logs      │  │  🛡️  Access     │ ║
-║  │                     │  │                     │  │     Control      │ ║
-║  │ • Column-level      │  │ • All Operations    │  │ • Row-level      │ ║
-║  │ • Table deps        │  │ • User Activity     │  │ • Column-level   │ ║
-║  │ • Impact Analysis   │  │ • Compliance        │  │ • Dynamic masks  │ ║
-║  └─────────────────────┘  └─────────────────────┘  └─────────────────┘ ║
-║                                                                           ║
-║  ┌──────────────────────────────────────────────────────────────────┐   ║
-║  │                    💾 Delta Lake Tables                           │   ║
-║  │     ACID Transactions  •  Time Travel  •  Schema Evolution        │   ║
-║  └──────────────────────────────────────────────────────────────────┘   ║
-╚═══════════════════════════════════════════════════════════════════════════╝
+> **📐 Interactive Diagram Available!**  
+> Open [`docs/architecture.drawio`](docs/architecture.drawio) in [draw.io](https://app.diagrams.net) for an interactive, editable version of this architecture.
 
-                    🔄 Supported Patterns (v1)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The architecture follows a **4-layer governed control plane pattern**:
 
-    📊 Incremental Append  │  🔄 Full Replace  │  🔀 Merge/Upsert  │  📜 SCD Type 2
-    📸 Snapshot           │  🎯 Aggregate     │  🔑 Surrogate Key │  🧹 Dedup
+#### **Layer 1: 👥 User Layer**
+Business Analysts, Data Engineers, Data Stewards, and Platform Admins interact with SQLPilot through a unified interface.
+
+#### **Layer 2: 🎛️ SQLPilot Control Plane**
+- **React UI** (`ui/plan-editor/src/`) - Plan Editor, Plan List, Execution Dashboard
+- **FastAPI Backend** (`api/main.py`) - REST API, SQL Compiler, Schema Validator, Execution Engine
+- **AI Agents** (`agents/`) - Validation, Optimization, Explanation (bounded, no direct SQL execution)
+- **Plan Registry (Lakebase)** - PostgreSQL-backed registry for versioned plans, execution history, metadata, and audit logs
+
+#### **Layer 3: ⚡ Execution Plane**
+- **Databricks SQL Warehouse** - Serverless compute for query execution with result caching
+- **Execution Monitoring** - Real-time status tracking, error details, performance metrics
+
+#### **Layer 4: 🔒 Governance & Data Layer**
+- **Unity Catalog** - Centralized governance for catalogs, schemas, tables, and permissions
+- **Data Lineage** - Column-level tracking, table dependencies, impact analysis
+- **Audit Logs** - Complete compliance trail of all operations and user activity
+- **Access Control** - Row-level security, column masking, permission validation
+- **Delta Lake** - ACID transactions, time travel, schema evolution
+
+#### **🔄 Supported Patterns (8 Total)**
+
+| Pattern | Description | Use Case |
+|---------|-------------|----------|
+| 📊 **Incremental Append** | Watermark-based incremental loads | Daily event processing |
+| 🔄 **Full Replace** | Complete table replacement | Dimension snapshots |
+| 🔀 **Merge/Upsert** | Conditional insert/update | Customer master updates |
+| 📜 **SCD Type 2** | Historical dimension tracking | Profile change history |
+| 📸 **Snapshot** | Point-in-time data capture | Monthly data snapshots |
+| 🎯 **Aggregate** | Pre-computed aggregations | Daily sales rollups |
+| 🔑 **Surrogate Key** | Auto-generated surrogate keys | Dimension key generation |
+| 🧹 **Deduplication** | Remove duplicate records | Data quality cleanup |
+
+#### **Architecture Diagram**
+
+```mermaid
+graph TB
+    subgraph users["👥 USER LAYER"]
+        BA[Business Analysts]
+        DE[Data Engineers]
+        DS[Data Stewards]
+        PA[Platform Admins]
+    end
+    
+    subgraph control["🎛️ SQLPILOT CONTROL PLANE"]
+        UI[📝 React UI<br/>Plan Editor • List • Dashboard]
+        API[🔧 FastAPI Backend<br/>REST API • SQL Compiler]
+        AGENTS[🤖 AI Agents<br/>Validation • Optimization]
+        REGISTRY[(📋 Plan Registry<br/>Lakebase PostgreSQL)]
+    end
+    
+    subgraph execution["⚡ EXECUTION PLANE"]
+        WAREHOUSE[🏭 SQL Warehouse<br/>Serverless Compute]
+        MONITOR[📊 Execution Monitor<br/>Status • Errors • Metrics]
+    end
+    
+    subgraph governance["🔒 GOVERNANCE & DATA LAYER"]
+        UC[🏛️ Unity Catalog<br/>Permissions • ACLs]
+        LINEAGE[📈 Data Lineage]
+        AUDIT[📝 Audit Logs]
+        DELTA[💾 Delta Lake Tables]
+    end
+    
+    users --> control
+    control --> execution
+    execution --> governance
+    
+    style users fill:#E3F2FD,stroke:#1976D2,stroke-width:3px
+    style control fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px
+    style execution fill:#FFF3E0,stroke:#E65100,stroke-width:3px
+    style governance fill:#E8F5E9,stroke:#2E7D32,stroke-width:3px
 ```
+
+> **💡 Tip:** For a detailed, professional architecture diagram, open [`docs/architecture.drawio`](docs/architecture.drawio) in draw.io!
 
 ### Benefits Summary
 

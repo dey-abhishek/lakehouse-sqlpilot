@@ -145,6 +145,8 @@ docs/
 !docs/architecture.png
 !docs/ARCHITECTURE.md
 !docs/EXPORT_PNG_GUIDE.md
+!docs/ICON_GUIDE.md
+!docs/icons/
 CONTRIBUTING.md
 SECURITY.md
 IMPLEMENTATION_*.md

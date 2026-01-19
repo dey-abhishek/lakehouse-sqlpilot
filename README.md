@@ -107,98 +107,9 @@ Flow: Validated plan → Scheduled execution → Monitor → Alert
 Benefit: Reliable, repeatable data pipelines
 ```
 
-### Architecture Pattern
-
-> **📐 Interactive Diagram Available!**  
-> Open [`docs/architecture.drawio`](docs/architecture.drawio) in [draw.io](https://app.diagrams.net) for an interactive, editable version of this architecture.
-
-The architecture follows a **4-layer governed control plane pattern**:
-
-#### **Layer 1: 👥 User Layer**
-Business Analysts, Data Engineers, Data Stewards, and Platform Admins interact with SQLPilot through a unified interface.
-
-#### **Layer 2: 🎛️ SQLPilot Control Plane**
-- **React UI** (`ui/plan-editor/src/`) - Plan Editor, Plan List, Execution Dashboard
-- **FastAPI Backend** (`api/main.py`) - REST API, SQL Compiler, Schema Validator, Execution Engine
-- **AI Agents** (`agents/`) - Validation, Optimization, Explanation (bounded, no direct SQL execution)
-- **Plan Registry (Lakebase)** - PostgreSQL-backed registry for versioned plans, execution history, metadata, and audit logs
-
-#### **Layer 3: ⚡ Execution Plane**
-- **Databricks SQL Warehouse** - Serverless compute for query execution with result caching
-- **Execution Monitoring** - Real-time status tracking, error details, performance metrics
-
-#### **Layer 4: 🔒 Governance & Data Layer**
-- **Unity Catalog** - Centralized governance for catalogs, schemas, tables, and permissions
-- **Data Lineage** - Column-level tracking, table dependencies, impact analysis
-- **Audit Logs** - Complete compliance trail of all operations and user activity
-- **Access Control** - Row-level security, column masking, permission validation
-- **Delta Lake** - ACID transactions, time travel, schema evolution
-
-#### **🔄 Supported Patterns (8 Total)**
-
-| Pattern | Description | Use Case |
-|---------|-------------|----------|
-| 📊 **Incremental Append** | Watermark-based incremental loads | Daily event processing |
-| 🔄 **Full Replace** | Complete table replacement | Dimension snapshots |
-| 🔀 **Merge/Upsert** | Conditional insert/update | Customer master updates |
-| 📜 **SCD Type 2** | Historical dimension tracking | Profile change history |
-| 📸 **Snapshot** | Point-in-time data capture | Monthly data snapshots |
-| 🎯 **Aggregate** | Pre-computed aggregations | Daily sales rollups |
-| 🔑 **Surrogate Key** | Auto-generated surrogate keys | Dimension key generation |
-| 🧹 **Deduplication** | Remove duplicate records | Data quality cleanup |
-
-#### **Architecture Diagram**
+### Architecture
 
 ![SQLPilot Architecture](docs/architecture.png)
-
-> **📐 Interactive Diagram:**  
-> Open [`docs/architecture.drawio`](docs/architecture.drawio) in [draw.io](https://app.diagrams.net) to edit this diagram.
->
-> **🖼️ PNG Not Showing?**  
-> The PNG needs to be exported from the draw.io file. See [`docs/EXPORT_PNG_GUIDE.md`](docs/EXPORT_PNG_GUIDE.md) for instructions.
-
-<details>
-<summary>📊 Click here for simplified Mermaid diagram (if PNG doesn't load)</summary>
-
-```mermaid
-graph TB
-    subgraph users["👥 USER LAYER"]
-        BA[Business Analysts]
-        DE[Data Engineers]
-        DS[Data Stewards]
-        PA[Platform Admins]
-    end
-    
-    subgraph control["🎛️ SQLPILOT CONTROL PLANE"]
-        UI[📝 React UI<br/>Plan Editor • List • Dashboard]
-        API[🔧 FastAPI Backend<br/>REST API • SQL Compiler]
-        AGENTS[🤖 AI Agents<br/>Validation • Optimization]
-        REGISTRY[(📋 Plan Registry<br/>Lakebase PostgreSQL)]
-    end
-    
-    subgraph execution["⚡ EXECUTION PLANE"]
-        WAREHOUSE[🏭 SQL Warehouse<br/>Serverless Compute]
-        MONITOR[📊 Execution Monitor<br/>Status • Errors • Metrics]
-    end
-    
-    subgraph governance["🔒 GOVERNANCE & DATA LAYER"]
-        UC[🏛️ Unity Catalog<br/>Permissions • ACLs]
-        LINEAGE[📈 Data Lineage]
-        AUDIT[📝 Audit Logs]
-        DELTA[💾 Delta Lake Tables]
-    end
-    
-    users --> control
-    control --> execution
-    execution --> governance
-    
-    style users fill:#E3F2FD,stroke:#1976D2,stroke-width:3px
-    style control fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px
-    style execution fill:#FFF3E0,stroke:#E65100,stroke-width:3px
-    style governance fill:#E8F5E9,stroke:#2E7D32,stroke-width:3px
-```
-
-</details>
 
 ### Benefits Summary
 

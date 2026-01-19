@@ -309,6 +309,13 @@ class APIService {
     })
   }
 
+  async deleteTable(catalog: string, schema: string, table: string, warehouseId: string): Promise<{ success: boolean; table: string; statement_id: string; message: string }> {
+    return this.request<{ success: boolean; table: string; statement_id: string; message: string }>('/tables/delete', {
+      method: 'POST',
+      body: JSON.stringify({ catalog, schema, table, warehouse_id: warehouseId }),
+    })
+  }
+
   // Execution History
   async listExecutions(params?: { status?: string; executor_user?: string; limit?: number; offset?: number }): Promise<{ executions: any[]; total: number }> {
     const queryParams = new URLSearchParams()

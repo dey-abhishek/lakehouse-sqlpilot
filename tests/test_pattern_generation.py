@@ -13,6 +13,7 @@ from compiler.patterns.incremental_append import IncrementalAppendPattern
 from compiler.patterns.full_replace import FullReplacePattern
 from compiler.patterns.merge_upsert import MergeUpsertPattern
 from compiler.patterns.scd2 import SCD2Pattern
+from compiler.patterns.snapshot import SnapshotPattern
 
 
 @pytest.fixture
@@ -235,6 +236,78 @@ class TestMergeUpsertPattern:
         assert 'INSERT' in sql
 
 
+@pytest.fixture
+def snapshot_plan():
+    """Sample Snapshot plan"""
+    return {
+        'plan_metadata': {
+            'plan_id': str(uuid.uuid4()),
+            'plan_name': 'test_snapshot',
+            'version': '1.0.0'
+        },
+        'pattern': {'type': 'SNAPSHOT'},
+        'source': {
+            'catalog': 'lakehouse-sqlpilot',
+            'schema': 'lakehouse-sqlpilot-schema',
+            'table': 'inventory_current'
+        },
+        'target': {
+            'catalog': 'lakehouse-sqlpilot',
+            'schema': 'lakehouse-sqlpilot-schema',
+            'table': 'inventory_snapshots',
+            'write_mode': 'append'
+        },
+        'pattern_config': {
+            'snapshot_date_column': 'snapshot_date',
+            'partition_columns': ['snapshot_date']
+        }
+    }
+
+
+class TestSnapshotPattern:
+    """Test Snapshot pattern SQL generation"""
+    
+    def test_generate_snapshot_sql(self, snapshot_plan, execution_context):
+        """Test basic snapshot SQL generation"""
+        pattern = SnapshotPattern(snapshot_plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Check SQL structure
+        assert 'INSERT INTO' in sql
+        assert 'snapshot_date' in sql
+        assert 'inventory_current' in sql
+        assert 'inventory_snapshots' in sql
+        assert 'SELECT' in sql
+        print(f"Generated SQL:\n{sql}")
+    
+    def test_snapshot_with_custom_date(self, snapshot_plan):
+        """Test snapshot with custom snapshot date"""
+        pattern = SnapshotPattern(snapshot_plan)
+        context = {
+            'execution_id': str(uuid.uuid4()),
+            'snapshot_date': "'2026-01-15'"  # Custom date
+        }
+        sql = pattern.generate_sql(context)
+        
+        assert "'2026-01-15'" in sql
+        assert 'snapshot_date' in sql
+    
+    def test_snapshot_validation(self):
+        """Test snapshot pattern validation"""
+        invalid_plan = {
+            'plan_metadata': {'plan_id': str(uuid.uuid4())},
+            'pattern': {'type': 'SNAPSHOT'},
+            'source': {'catalog': 'c', 'schema': 's', 'table': 't'},
+            'target': {'catalog': 'c', 'schema': 's', 'table': 't'},
+            'pattern_config': {}  # Missing snapshot_date_column
+        }
+        pattern = SnapshotPattern(invalid_plan)
+        errors = pattern.validate_config()
+        
+        assert len(errors) > 0
+        assert 'snapshot_date_column' in errors[0]
+
+
 class TestPatternFactory:
     """Test pattern factory"""
     
@@ -264,6 +337,7 @@ class TestPatternFactory:
         assert 'SCD2' in patterns
         assert 'MERGE_UPSERT' in patterns
         assert 'FULL_REPLACE' in patterns
+        assert 'SNAPSHOT' in patterns
 
 
 if __name__ == "__main__":

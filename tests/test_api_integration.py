@@ -124,12 +124,13 @@ class TestPatternsEndpoint:
         assert "patterns" in data
         patterns = data["patterns"]
         assert isinstance(patterns, list)
-        assert len(patterns) == 4
+        assert len(patterns) == 5
         
         assert "INCREMENTAL_APPEND" in patterns
         assert "SCD2" in patterns
         assert "MERGE_UPSERT" in patterns
         assert "FULL_REPLACE" in patterns
+        assert "SNAPSHOT" in patterns
     
     def test_pattern_includes_required_fields(self, client):
         """Test that patterns endpoint returns valid pattern names"""

@@ -462,6 +462,26 @@ SELECT
 FROM `{source_catalog}`.`{source_schema}`.`{source_table}`
 WHERE 1=0
 """
+        elif pattern_type == "SNAPSHOT":
+            # Snapshot pattern needs to include the snapshot_date_column
+            pattern_config = plan.get("pattern_config", {})
+            snapshot_col = pattern_config.get("snapshot_date_column", "snapshot_date")
+            
+            if source_columns:
+                # Filter out snapshot column if it's already in source
+                filtered_columns = [col for col in source_columns if col != snapshot_col]
+                column_list = ", ".join([f"`{col}`" for col in filtered_columns])
+            else:
+                column_list = "*"
+            
+            create_table_sql = f"""
+CREATE TABLE IF NOT EXISTS `{target_catalog}`.`{target_schema}`.`{target_table}` AS
+SELECT 
+    {column_list},
+    CURRENT_DATE() AS `{snapshot_col}`
+FROM `{source_catalog}`.`{source_schema}`.`{source_table}`
+WHERE 1=0
+"""
         else:
             create_table_sql = f"""
 CREATE TABLE IF NOT EXISTS `{target_catalog}`.`{target_schema}`.`{target_table}`
@@ -485,6 +505,77 @@ LIKE `{source_catalog}`.`{source_schema}`.`{source_table}`
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/tables/delete")
+async def delete_table(request: dict):
+    """
+    Delete/drop a table from Unity Catalog
+    
+    Requires: DROP TABLE privilege on the table in Unity Catalog
+    """
+    import structlog
+    logger = structlog.get_logger()
+    
+    try:
+        ws = get_workspace_client()
+        
+        catalog = request.get("catalog")
+        schema = request.get("schema")
+        table = request.get("table")
+        warehouse_id = request.get("warehouse_id")
+        
+        full_table_name = f"`{catalog}`.`{schema}`.`{table}`"
+        logger.info("delete_table_request", table=full_table_name, warehouse_id=warehouse_id)
+        
+        if not all([catalog, schema, table, warehouse_id]):
+            raise HTTPException(status_code=400, detail="Missing required fields: catalog, schema, table, warehouse_id")
+        
+        # Execute DROP TABLE
+        # Note: Unity Catalog will enforce permissions
+        # User must have DROP privilege on the table
+        drop_sql = f"DROP TABLE IF EXISTS {full_table_name}"
+        
+        try:
+            result = ws.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=drop_sql,
+                wait_timeout="30s"
+            )
+            
+            logger.info("table_deleted_success", table=full_table_name, statement_id=result.statement_id)
+            
+            return {
+                "success": True,
+                "table": full_table_name,
+                "statement_id": result.statement_id,
+                "message": f"Table {full_table_name} deleted successfully"
+            }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("table_deletion_failed", table=full_table_name, error=error_msg)
+            
+            # Check for permission-related errors
+            if any(keyword in error_msg.upper() for keyword in [
+                'PERMISSION', 'DENIED', 'INSUFFICIENT_PRIVILEGE', 
+                'NOT_AUTHORIZED', 'ACCESS_DENIED', 'FORBIDDEN'
+            ]):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Permission denied: You don't have DROP TABLE privilege on {full_table_name}. "
+                           f"Please contact your Unity Catalog administrator to grant the necessary permissions."
+                )
+            
+            # For other errors, provide the actual error message
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to delete table: {error_msg}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_table_error", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.post("/api/v1/plans/execute")
 async def execute_plan(request: ExecutionRequest):

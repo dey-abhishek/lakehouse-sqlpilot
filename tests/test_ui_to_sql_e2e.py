@@ -125,6 +125,127 @@ def scd2_plan():
     }
 
 
+@pytest.fixture
+def full_replace_plan():
+    """Full Replace plan for testing"""
+    plan_id = str(uuid.uuid4())
+    return {
+        "schema_version": "1.0",
+        "plan_metadata": {
+            "plan_id": plan_id,
+            "plan_name": "e2e_full_replace_test",
+            "version": "1.0.0",
+            "description": "End-to-end test plan for Full Replace",
+            "owner": "test@databricks.com",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "tags": {"env": "test", "type": "e2e", "pattern": "full_replace"}
+        },
+        "pattern": {
+            "type": "FULL_REPLACE"
+        },
+        "source": {
+            "catalog": "test_catalog",
+            "schema": "staging",
+            "table": "products_staging"
+        },
+        "target": {
+            "catalog": "test_catalog",
+            "schema": "curated",
+            "table": "products",
+            "write_mode": "overwrite"
+        },
+        "pattern_config": {},  # Required even if empty
+        "execution_config": {
+            "warehouse_id": "test_warehouse",
+            "batch_size": 1000,
+            "timeout_seconds": 300
+        }
+    }
+
+
+@pytest.fixture
+def merge_upsert_plan():
+    """Merge/Upsert plan for testing"""
+    plan_id = str(uuid.uuid4())
+    return {
+        "schema_version": "1.0",
+        "plan_metadata": {
+            "plan_id": plan_id,
+            "plan_name": "e2e_merge_upsert_test",
+            "version": "1.0.0",
+            "description": "End-to-end test plan for Merge/Upsert",
+            "owner": "test@databricks.com",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "tags": {"env": "test", "type": "e2e", "pattern": "merge"}
+        },
+        "pattern": {
+            "type": "MERGE_UPSERT"
+        },
+        "source": {
+            "catalog": "test_catalog",
+            "schema": "staging",
+            "table": "accounts_updates",
+            "columns": ["account_id", "account_name", "balance", "status"]
+        },
+        "target": {
+            "catalog": "test_catalog",
+            "schema": "curated",
+            "table": "accounts",
+            "write_mode": "merge"
+        },
+        "pattern_config": {
+            "merge_keys": ["account_id"],
+            "update_columns": ["account_name", "balance", "status"]
+        },
+        "execution_config": {
+            "warehouse_id": "test_warehouse",
+            "batch_size": 1000,
+            "timeout_seconds": 300
+        }
+    }
+
+
+@pytest.fixture
+def snapshot_plan():
+    """Snapshot plan for testing"""
+    plan_id = str(uuid.uuid4())
+    return {
+        "schema_version": "1.0",
+        "plan_metadata": {
+            "plan_id": plan_id,
+            "plan_name": "e2e_snapshot_test",
+            "version": "1.0.0",
+            "description": "End-to-end test plan for Snapshot",
+            "owner": "test@databricks.com",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "tags": {"env": "test", "type": "e2e", "pattern": "snapshot"}
+        },
+        "pattern": {
+            "type": "SNAPSHOT"
+        },
+        "source": {
+            "catalog": "test_catalog",
+            "schema": "raw",
+            "table": "inventory_current"
+        },
+        "target": {
+            "catalog": "test_catalog",
+            "schema": "curated",
+            "table": "inventory_snapshots",
+            "write_mode": "append"
+        },
+        "pattern_config": {
+            "snapshot_date_column": "snapshot_date",
+            "partition_columns": ["snapshot_date"]
+        },
+        "execution_config": {
+            "warehouse_id": "test_warehouse",
+            "batch_size": 1000,
+            "timeout_seconds": 300
+        }
+    }
+
+
 class TestEndToEndWorkflow:
     """Test complete workflow from UI to SQL generation"""
     
@@ -264,6 +385,196 @@ class TestEndToEndWorkflow:
         print(f"[E2E] ✅ SCD2 SQL validated")
         print(f"\n[E2E] SUCCESS: SCD2 workflow completed for plan {plan_id}\n")
     
+    def test_save_retrieve_compile_full_replace(self, client, full_replace_plan):
+        """
+        Test: Save plan → Retrieve plan → Compile to SQL
+        Pattern: FULL_REPLACE
+        """
+        plan_id = full_replace_plan["plan_metadata"]["plan_id"]
+        
+        # Step 1: Save plan
+        print(f"\n[E2E] Step 1: Saving Full Replace plan {plan_id}...")
+        save_response = client.post("/api/v1/plans", json={
+            "plan": full_replace_plan,
+            "user": "test@databricks.com"
+        })
+        
+        assert save_response.status_code == 200, f"Full Replace save failed: {save_response.text}"
+        save_data = save_response.json()
+        assert save_data["success"] is True
+        assert save_data["plan_id"] == plan_id
+        
+        print(f"[E2E] ✅ Full Replace plan saved")
+        
+        # Step 2: Retrieve plan
+        print(f"[E2E] Step 2: Retrieving Full Replace plan...")
+        get_response = client.get(f"/api/v1/plans/{plan_id}")
+        
+        assert get_response.status_code == 200
+        retrieved_plan = get_response.json()
+        
+        assert retrieved_plan["pattern"]["type"] == "FULL_REPLACE"
+        assert retrieved_plan["target"]["write_mode"] == "overwrite"
+        assert "pattern_config" in retrieved_plan
+        
+        print(f"[E2E] ✅ Full Replace plan retrieved")
+        
+        # Step 3: Compile to SQL
+        print(f"[E2E] Step 3: Compiling Full Replace to SQL...")
+        compile_plan = {k: v for k, v in retrieved_plan.items() if k != "_metadata"}
+        
+        compile_response = client.post("/api/v1/plans/compile", json={
+            "plan": compile_plan,
+            "context": {}
+        })
+        
+        assert compile_response.status_code == 200
+        compile_data = compile_response.json()
+        assert compile_data["success"] is True
+        
+        sql = compile_data["sql"]
+        assert sql is not None
+        assert len(sql) > 0
+        
+        print(f"[E2E] ✅ Full Replace SQL generated")
+        
+        # Step 4: Verify Full Replace SQL correctness
+        # Full Replace uses CREATE OR REPLACE TABLE or INSERT OVERWRITE
+        assert "CREATE OR REPLACE TABLE" in sql or "INSERT OVERWRITE" in sql or "TRUNCATE" in sql
+        assert "`test_catalog`.`curated`.`products`" in sql or "test_catalog.curated.products" in sql
+        assert "`test_catalog`.`staging`.`products_staging`" in sql or "test_catalog.staging.products_staging" in sql
+        
+        print(f"[E2E] ✅ Full Replace SQL validated")
+        print(f"\n[E2E] SUCCESS: Full Replace workflow completed for plan {plan_id}\n")
+    
+    def test_save_retrieve_compile_merge_upsert(self, client, merge_upsert_plan):
+        """
+        Test: Save plan → Retrieve plan → Compile to SQL
+        Pattern: MERGE_UPSERT
+        """
+        plan_id = merge_upsert_plan["plan_metadata"]["plan_id"]
+        
+        # Step 1: Save plan
+        print(f"\n[E2E] Step 1: Saving Merge/Upsert plan {plan_id}...")
+        save_response = client.post("/api/v1/plans", json={
+            "plan": merge_upsert_plan,
+            "user": "test@databricks.com"
+        })
+        
+        assert save_response.status_code == 200, f"Merge/Upsert save failed: {save_response.text}"
+        save_data = save_response.json()
+        assert save_data["success"] is True
+        assert save_data["plan_id"] == plan_id
+        
+        print(f"[E2E] ✅ Merge/Upsert plan saved")
+        
+        # Step 2: Retrieve plan
+        print(f"[E2E] Step 2: Retrieving Merge/Upsert plan...")
+        get_response = client.get(f"/api/v1/plans/{plan_id}")
+        
+        assert get_response.status_code == 200
+        retrieved_plan = get_response.json()
+        
+        assert retrieved_plan["pattern"]["type"] == "MERGE_UPSERT"
+        assert "merge_keys" in retrieved_plan["pattern_config"]
+        assert retrieved_plan["pattern_config"]["merge_keys"] == ["account_id"]
+        assert "update_columns" in retrieved_plan["pattern_config"]
+        
+        print(f"[E2E] ✅ Merge/Upsert plan retrieved")
+        
+        # Step 3: Compile to SQL
+        print(f"[E2E] Step 3: Compiling Merge/Upsert to SQL...")
+        compile_plan = {k: v for k, v in retrieved_plan.items() if k != "_metadata"}
+        
+        compile_response = client.post("/api/v1/plans/compile", json={
+            "plan": compile_plan,
+            "context": {}
+        })
+        
+        assert compile_response.status_code == 200
+        compile_data = compile_response.json()
+        assert compile_data["success"] is True
+        
+        sql = compile_data["sql"]
+        assert sql is not None
+        assert len(sql) > 0
+        
+        print(f"[E2E] ✅ Merge/Upsert SQL generated")
+        
+        # Step 4: Verify Merge/Upsert SQL correctness
+        assert "MERGE INTO" in sql
+        assert "WHEN MATCHED" in sql
+        assert "WHEN NOT MATCHED" in sql
+        assert "`test_catalog`.`curated`.`accounts`" in sql or "test_catalog.curated.accounts" in sql
+        assert "`test_catalog`.`staging`.`accounts_updates`" in sql or "test_catalog.staging.accounts_updates" in sql
+        assert "account_id" in sql  # merge key
+        assert "account_name" in sql or "balance" in sql or "status" in sql  # update columns
+        
+        print(f"[E2E] ✅ Merge/Upsert SQL validated")
+        print(f"\n[E2E] SUCCESS: Merge/Upsert workflow completed for plan {plan_id}\n")
+    
+    def test_save_retrieve_compile_snapshot(self, client, snapshot_plan):
+        """
+        Test: Save plan → Retrieve plan → Compile to SQL
+        Pattern: SNAPSHOT
+        """
+        plan_id = snapshot_plan["plan_metadata"]["plan_id"]
+        
+        # Step 1: Save plan
+        print(f"\n[E2E] Step 1: Saving Snapshot plan {plan_id}...")
+        save_response = client.post("/api/v1/plans", json={
+            "plan": snapshot_plan,
+            "user": "test@databricks.com"
+        })
+        
+        assert save_response.status_code == 200, f"Snapshot save failed: {save_response.text}"
+        save_data = save_response.json()
+        assert save_data["success"] is True
+        assert save_data["plan_id"] == plan_id
+        
+        print(f"[E2E] ✅ Snapshot plan saved")
+        
+        # Step 2: Retrieve plan
+        print(f"[E2E] Step 2: Retrieving Snapshot plan...")
+        get_response = client.get(f"/api/v1/plans/{plan_id}")
+        
+        assert get_response.status_code == 200
+        retrieved_plan = get_response.json()
+        
+        assert retrieved_plan["pattern"]["type"] == "SNAPSHOT"
+        assert "snapshot_date_column" in retrieved_plan["pattern_config"]
+        assert retrieved_plan["pattern_config"]["snapshot_date_column"] == "snapshot_date"
+        
+        print(f"[E2E] ✅ Snapshot plan retrieved")
+        
+        # Step 3: Compile to SQL
+        print(f"[E2E] Step 3: Compiling Snapshot to SQL...")
+        compile_plan = {k: v for k, v in retrieved_plan.items() if k != "_metadata"}
+        
+        compile_response = client.post("/api/v1/plans/compile", json={
+            "plan": compile_plan,
+            "context": {}
+        })
+        
+        assert compile_response.status_code == 200
+        compile_data = compile_response.json()
+        assert compile_data["success"] is True
+        
+        sql = compile_data["sql"]
+        assert sql is not None
+        assert len(sql) > 0
+        
+        print(f"[E2E] ✅ Snapshot SQL generated")
+        
+        # Step 4: Verify Snapshot SQL correctness
+        assert "INSERT INTO" in sql
+        assert "`test_catalog`.`curated`.`inventory_snapshots`" in sql or "test_catalog.curated.inventory_snapshots" in sql
+        assert "`test_catalog`.`raw`.`inventory_current`" in sql or "test_catalog.raw.inventory_current" in sql
+        assert "snapshot_date" in sql  # snapshot column
+        
+        print(f"[E2E] ✅ Snapshot SQL validated")
+        print(f"\n[E2E] SUCCESS: Snapshot workflow completed for plan {plan_id}\n")
+    
     def test_list_plans_includes_saved_plan(self, client, sample_plan):
         """Test that saved plans appear in list endpoint"""
         plan_id = sample_plan["plan_metadata"]["plan_id"]
@@ -288,15 +599,27 @@ class TestEndToEndWorkflow:
         
         print(f"[E2E] ✅ Saved plan appears in list endpoint")
     
-    def test_filter_plans_by_pattern_type(self, client, sample_plan, scd2_plan):
+    def test_filter_plans_by_pattern_type(self, client, sample_plan, scd2_plan, full_replace_plan, merge_upsert_plan, snapshot_plan):
         """Test filtering plans by pattern type"""
-        # Save both plans
+        # Save all plan types
         client.post("/api/v1/plans", json={
             "plan": sample_plan,
             "user": "test@databricks.com"
         })
         client.post("/api/v1/plans", json={
             "plan": scd2_plan,
+            "user": "test@databricks.com"
+        })
+        client.post("/api/v1/plans", json={
+            "plan": full_replace_plan,
+            "user": "test@databricks.com"
+        })
+        client.post("/api/v1/plans", json={
+            "plan": merge_upsert_plan,
+            "user": "test@databricks.com"
+        })
+        client.post("/api/v1/plans", json={
+            "plan": snapshot_plan,
             "user": "test@databricks.com"
         })
         
@@ -312,7 +635,31 @@ class TestEndToEndWorkflow:
         scd2_plans = [p for p in data["plans"] if p["pattern_type"] == "SCD2"]
         assert len(scd2_plans) == 0
         
-        print(f"[E2E] ✅ Pattern filtering works")
+        # Filter by FULL_REPLACE
+        response = client.get("/api/v1/plans?pattern_type=FULL_REPLACE")
+        assert response.status_code == 200
+        data = response.json()
+        
+        full_replace_plans = [p for p in data["plans"] if p["pattern_type"] == "FULL_REPLACE"]
+        assert len(full_replace_plans) > 0
+        
+        # Filter by MERGE_UPSERT
+        response = client.get("/api/v1/plans?pattern_type=MERGE_UPSERT")
+        assert response.status_code == 200
+        data = response.json()
+        
+        merge_plans = [p for p in data["plans"] if p["pattern_type"] == "MERGE_UPSERT"]
+        assert len(merge_plans) > 0
+        
+        # Filter by SNAPSHOT
+        response = client.get("/api/v1/plans?pattern_type=SNAPSHOT")
+        assert response.status_code == 200
+        data = response.json()
+        
+        snapshot_plans = [p for p in data["plans"] if p["pattern_type"] == "SNAPSHOT"]
+        assert len(snapshot_plans) > 0
+        
+        print(f"[E2E] ✅ Pattern filtering works for all 5 patterns")
     
     def test_update_plan_workflow(self, client, sample_plan):
         """Test updating an existing plan"""

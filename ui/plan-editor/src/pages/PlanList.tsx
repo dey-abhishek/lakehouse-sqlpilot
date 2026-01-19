@@ -66,6 +66,7 @@ function PlanList() {
   const [previewPlanName, setPreviewPlanName] = useState('')
   const [previewPlanId, setPreviewPlanId] = useState('')
   const [previewWarehouseId, setPreviewWarehouseId] = useState('')
+  const [previewPatternType, setPreviewPatternType] = useState('')
   const [copySuccess, setCopySuccess] = useState(false)
   const [executing, setExecuting] = useState(false)
   const [tableExists, setTableExists] = useState<boolean | null>(null)
@@ -126,6 +127,7 @@ function PlanList() {
       console.log('[PlanList] Plan name:', planName)
       
       const warehouseId = (plan as any).execution_config?.warehouse_id || ''
+      const patternType = (plan as any).pattern?.type || ''
       const targetCatalog = (plan as any).target?.catalog
       const targetSchema = (plan as any).target?.schema
       const targetTable = (plan as any).target?.table
@@ -153,6 +155,7 @@ function PlanList() {
         setPreviewPlanName(planName)
         setPreviewSQL(result.sql)
         setPreviewWarehouseId(warehouseId)
+        setPreviewPatternType(patternType)
         setPreviewOpen(true)
         
         // Check if target table exists
@@ -237,6 +240,59 @@ function PlanList() {
     }
   }
 
+  const handleDeleteTable = async () => {
+    if (!previewPlanId || !previewWarehouseId) {
+      alert('Missing plan ID or warehouse ID')
+      return
+    }
+    
+    // Confirm deletion
+    if (!window.confirm('⚠️ Are you sure you want to DELETE this table? This action cannot be undone!\n\nAll snapshot data will be lost.')) {
+      return
+    }
+    
+    setCreatingTable(true) // Reuse this loading state
+    try {
+      console.log('[PlanList] Deleting table for plan:', previewPlanId)
+      
+      // Get table info from current plan
+      const plan = await api.getPlan(previewPlanId)
+      const targetCatalog = (plan as any).target?.catalog
+      const targetSchema = (plan as any).target?.schema
+      const targetTable = (plan as any).target?.table
+      
+      if (!targetCatalog || !targetSchema || !targetTable) {
+        alert('Cannot determine table information')
+        return
+      }
+      
+      const result = await api.deleteTable(targetCatalog, targetSchema, targetTable, previewWarehouseId)
+      console.log('[PlanList] Delete table response:', result)
+      
+      if (result.success) {
+        alert(`✅ Table deleted successfully!\n\nTable: ${result.table}\nStatement ID: ${result.statement_id}`)
+        
+        // Force recheck of table existence
+        await recheckTable()
+      } else {
+        alert(`Table deletion failed: ${result.message}`)
+      }
+    } catch (error: any) {
+      console.error('[PlanList] Table deletion failed:', error)
+      
+      // Handle permission errors specially
+      if (error.message && error.message.includes('Permission denied')) {
+        alert(`❌ Permission Denied\n\n${error.message}\n\nYou need DROP TABLE privilege in Unity Catalog to delete this table.`)
+      } else if (error.message && error.message.includes('403')) {
+        alert(`❌ Access Forbidden\n\nYou don't have permission to delete this table.\n\nRequired privilege: DROP TABLE on the target catalog/schema.\n\nPlease contact your Unity Catalog administrator.`)
+      } else {
+        alert(`Table deletion failed: ${error.message || 'Unknown error'}`)
+      }
+    } finally {
+      setCreatingTable(false)
+    }
+  }
+
   const handleCopySQL = () => {
     navigator.clipboard.writeText(previewSQL)
     setCopySuccess(true)
@@ -248,6 +304,7 @@ function PlanList() {
     setPreviewSQL('')
     setPreviewPlanName('')
     setPreviewPlanId('')
+    setPreviewPatternType('')
     setCopySuccess(false)
     setExecuting(false)
   }
@@ -368,6 +425,7 @@ function PlanList() {
             <MenuItem value="SCD2">SCD2</MenuItem>
             <MenuItem value="MERGE_UPSERT">Merge Upsert</MenuItem>
             <MenuItem value="FULL_REPLACE">Full Replace</MenuItem>
+            <MenuItem value="SNAPSHOT">Snapshot</MenuItem>
           </TextField>
           
           <TextField
@@ -576,6 +634,18 @@ function PlanList() {
               startIcon={creatingTable ? <CircularProgress size={20} color="inherit" /> : null}
             >
               {creatingTable ? 'Creating Table...' : 'Create Table'}
+            </Button>
+          )}
+          {/* Show Delete Table if table exists AND this is a SNAPSHOT pattern */}
+          {!checkingTable && tableExists === true && previewPatternType === 'SNAPSHOT' && (
+            <Button 
+              onClick={handleDeleteTable}
+              variant="contained"
+              color="error"
+              disabled={creatingTable}
+              startIcon={creatingTable ? <CircularProgress size={20} color="inherit" /> : null}
+            >
+              {creatingTable ? 'Deleting...' : 'Delete Table'}
             </Button>
           )}
           <Button 

@@ -24,7 +24,6 @@ const PATTERN_TYPES = [
   'MERGE_UPSERT',
   'SCD2',
   'SNAPSHOT',
-  'AGGREGATE_REFRESH',
 ]
 
 const WRITE_MODES = ['append', 'overwrite', 'merge']
@@ -60,6 +59,8 @@ function PlanEditor() {
     effective_date_column: 'effective_date',
     end_date_column: 'end_date',
     current_flag_column: 'is_current',
+    snapshot_date_column: '',
+    partition_columns: '',
   })
 
   // Unity Catalog data
@@ -129,6 +130,8 @@ function PlanEditor() {
         effective_date_column: existingPlan.pattern_config?.effective_date_column || 'effective_date',
         end_date_column: existingPlan.pattern_config?.end_date_column || 'end_date',
         current_flag_column: existingPlan.pattern_config?.current_flag_column || 'is_current',
+        snapshot_date_column: existingPlan.pattern_config?.snapshot_date_column || '',
+        partition_columns: existingPlan.pattern_config?.partition_columns?.join(',') || '',
       })
       
       console.log('[PlanEditor] Set plan state with pattern_type:', existingPlan.pattern?.type)
@@ -339,6 +342,20 @@ function PlanEditor() {
         case 'FULL_REPLACE':
           // No config needed
           patternConfig = {}
+          break
+          
+        case 'SNAPSHOT':
+          patternConfig = {
+            snapshot_date_column: plan.snapshot_date_column || (plan.config as any)?.snapshot_date_column,
+          }
+          // Add partition columns if specified
+          if (plan.partition_columns) {
+            patternConfig.partition_columns = plan.partition_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
+          // Add source columns if specified
+          if (plan.source_columns) {
+            sourceConfig.columns = plan.source_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
           break
           
         default:
@@ -659,7 +676,9 @@ function PlanEditor() {
                 'Updates existing records and inserts new ones based on merge keys. Efficient for maintaining current state.'}
               {plan.pattern_type === 'SCD2' && 
                 'Tracks historical changes with versioning. Maintains full history of dimension changes over time.'}
-              {!['INCREMENTAL_APPEND', 'FULL_REPLACE', 'MERGE_UPSERT', 'SCD2'].includes(plan.pattern_type) && 
+              {plan.pattern_type === 'SNAPSHOT' && 
+                'Captures a complete point-in-time snapshot of the source table. Perfect for daily inventory snapshots, end-of-period balances, or historical reporting.'}
+              {!['INCREMENTAL_APPEND', 'FULL_REPLACE', 'MERGE_UPSERT', 'SCD2', 'SNAPSHOT'].includes(plan.pattern_type) && 
                 'Select a pattern type to see its description.'}
             </Alert>
           </Grid>
@@ -965,6 +984,45 @@ function PlanEditor() {
                 The entire target table will be atomically replaced with source data.
               </Alert>
             </Grid>
+          )}
+
+          {/* SNAPSHOT Configuration */}
+          {plan.pattern_type === 'SNAPSHOT' && (
+            <>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Snapshot Date Column *"
+                  value={plan.snapshot_date_column}
+                  onChange={handleChange('snapshot_date_column')}
+                  helperText="Column name for snapshot date/timestamp (e.g., snapshot_date)"
+                  placeholder="snapshot_date"
+                  required
+                />
+              </Grid>
+              
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Source Columns (optional)"
+                  value={plan.source_columns}
+                  onChange={handleChange('source_columns')}
+                  helperText="Comma-separated columns to snapshot (leave empty for all)"
+                  placeholder="customer_id,name,email"
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Partition Columns (optional)"
+                  value={plan.partition_columns}
+                  onChange={handleChange('partition_columns')}
+                  helperText="Comma-separated columns for partitioning (e.g., snapshot_date)"
+                  placeholder="snapshot_date"
+                />
+              </Grid>
+            </>
           )}
 
           {/* Execution Configuration */}

@@ -8,6 +8,7 @@ from .incremental_append import IncrementalAppendPattern
 from .scd2 import SCD2Pattern
 from .merge_upsert import MergeUpsertPattern
 from .full_replace import FullReplacePattern
+from .snapshot import SnapshotPattern
 
 
 class PatternFactory:
@@ -19,6 +20,7 @@ class PatternFactory:
         'SCD2': SCD2Pattern,
         'MERGE_UPSERT': MergeUpsertPattern,
         'FULL_REPLACE': FullReplacePattern,
+        'SNAPSHOT': SnapshotPattern,
     }
     
     @classmethod
@@ -61,4 +63,5 @@ __all__ = [
     'SCD2Pattern',
     'MergeUpsertPattern',
     'FullReplacePattern',
+    'SnapshotPattern',
 ]

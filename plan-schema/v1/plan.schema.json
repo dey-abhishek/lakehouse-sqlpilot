@@ -66,7 +66,8 @@
             "INCREMENTAL_APPEND",
             "FULL_REPLACE",
             "MERGE_UPSERT",
-            "SCD2"
+            "SCD2",
+            "SNAPSHOT"
           ],
           "description": "SQL generation pattern type"
         }
@@ -191,6 +192,15 @@
         "update_columns": {
           "type": "array",
           "items": {"type": "string"}
+        },
+        "snapshot_date_column": {
+          "type": "string",
+          "description": "Column name for snapshot date/timestamp (SNAPSHOT pattern)"
+        },
+        "partition_columns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Columns to partition by (SNAPSHOT pattern)"
         }
       },
       "additionalProperties": false

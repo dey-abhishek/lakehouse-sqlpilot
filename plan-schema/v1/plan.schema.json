@@ -163,6 +163,12 @@
         "watermark_initial_value": {
           "type": "string"
         },
+        "match_columns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1,
+          "description": "Columns to match on for MERGE mode in INCREMENTAL_APPEND"
+        },
         "business_keys": {
           "type": "array",
           "items": {"type": "string"},

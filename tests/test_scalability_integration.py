@@ -45,6 +45,9 @@ def mock_lakebase(monkeypatch):
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
         mock_conn.cursor.return_value.__exit__.return_value = None
         
+        # Mock table count check - return 10 to skip schema initialization
+        mock_cursor.fetchone.return_value = (10,)
+        
         # Mock pool
         mock_pool_instance = MagicMock()
         mock_pool_instance.getconn.return_value = mock_conn

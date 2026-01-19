@@ -3,14 +3,25 @@ FastAPI Backend for Lakehouse SQLPilot
 Provides REST API for the React frontend
 """
 
+# Load environment variables first (before any other imports)
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env.dev for development
+env_file = Path(__file__).parent.parent / '.env.dev'
+if env_file.exists():
+    load_dotenv(env_file)
+    print(f"✅ Loaded environment from {env_file}")
+else:
+    print(f"⚠️  No .env.dev found at {env_file}")
+
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
-import os
-from pathlib import Path
 
 from compiler import SQLCompiler
 from execution import SQLExecutor, ExecutionTracker
@@ -18,6 +29,18 @@ from unity_catalog import PermissionValidator
 from preview import PreviewEngine
 from plan_schema.v1.validator import PlanValidator
 from databricks.sdk import WorkspaceClient
+
+# Import plan registry (optional - only if Lakebase is enabled)
+try:
+    from plan_registry import get_plan_registry
+    plan_registry_available = True
+except Exception as e:
+    plan_registry_available = False
+    logger = None  # Will set up later
+    if hasattr(e, '__name__') and 'RuntimeError' not in str(type(e)):
+        import structlog
+        logger = structlog.get_logger()
+        logger.warning("plan_registry_not_available", error=str(e))
 
 # Import security middleware
 from security.middleware import (
@@ -55,9 +78,70 @@ app.add_middleware(
 )
 
 # Initialize components
-workspace_client = WorkspaceClient()
+# Use centralized OAuth token manager for all Databricks API calls
+from infrastructure.oauth_token_manager import get_oauth_token_manager
+
+_workspace_client = None
+_oauth_manager = None
+
+def get_workspace_client():
+    """
+    Get or create WorkspaceClient with OAuth token auto-refresh
+    
+    Uses centralized OAuth token manager for automatic token rotation.
+    Tokens are refreshed 5 minutes before expiry.
+    """
+    global _workspace_client, _oauth_manager
+    
+    if _workspace_client is None:
+        try:
+            # Initialize OAuth token manager (singleton)
+            _oauth_manager = get_oauth_token_manager(
+                auto_refresh=True,
+                refresh_buffer_minutes=5
+            )
+            
+            # Get current token
+            token = _oauth_manager.get_token()
+            
+            # Save env vars that might interfere
+            saved_client_id = os.environ.pop('DATABRICKS_CLIENT_ID', None)
+            saved_client_secret = os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
+            
+            try:
+                # Initialize WorkspaceClient with OAuth token ONLY
+                # (avoid mixing auth methods)
+                _workspace_client = WorkspaceClient(
+                    host=f"https://{_oauth_manager.databricks_host}",
+                    token=token
+                )
+            finally:
+                # Restore env vars for other components
+                if saved_client_id:
+                    os.environ['DATABRICKS_CLIENT_ID'] = saved_client_id
+                if saved_client_secret:
+                    os.environ['DATABRICKS_CLIENT_SECRET'] = saved_client_secret
+            
+            import structlog
+            logger = structlog.get_logger()
+            logger.info(
+                "workspace_client_initialized",
+                host=_oauth_manager.databricks_host,
+                auth="oauth_service_principal",
+                auto_refresh=True
+            )
+            
+        except Exception as e:
+            import structlog
+            logger = structlog.get_logger()
+            logger.warning("workspace_client_init_failed", error=str(e))
+            # Return None - features requiring workspace client will fail gracefully
+            return None
+    return _workspace_client
+
+workspace_client = get_workspace_client()
 compiler = SQLCompiler("plan-schema/v1/plan.schema.json")
-permission_validator = PermissionValidator(workspace_client)
+permission_validator = PermissionValidator(workspace_client) if workspace_client else None
 
 # Models
 class PlanValidationRequest(BaseModel):
@@ -240,39 +324,404 @@ async def list_patterns():
         "patterns": compiler.get_supported_patterns()
     }
 
-@app.post("/api/v1/plans/execute")
-async def execute_plan(request: ExecutionRequest):
-    """Execute a compiled SQL plan"""
+@app.post("/api/v1/tables/check")
+async def check_table_exists(request: dict):
+    """Check if a table exists in Unity Catalog"""
+    import structlog
+    logger = structlog.get_logger()
+    
     try:
-        # Initialize executor with workspace credentials
-        from databricks import sql
-        host = os.getenv("DATABRICKS_HOST", "")
-        token = os.getenv("DATABRICKS_TOKEN", "")
+        ws = get_workspace_client()
         
-        if not host or not token:
-            raise HTTPException(
-                status_code=500,
-                detail="Databricks credentials not configured"
+        catalog = request.get("catalog")
+        schema = request.get("schema")
+        table = request.get("table")
+        warehouse_id = request.get("warehouse_id")
+        
+        full_table_name = f"`{catalog}`.`{schema}`.`{table}`"
+        logger.info("check_table_exists", table=full_table_name, warehouse_id=warehouse_id)
+        
+        if not all([catalog, schema, table, warehouse_id]):
+            raise HTTPException(status_code=400, detail="Missing required fields: catalog, schema, table, warehouse_id")
+        
+        try:
+            result = ws.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=f"DESCRIBE TABLE `{catalog}`.`{schema}`.`{table}`",
+                wait_timeout="10s"
             )
+            
+            # Check if the statement actually succeeded
+            if result.status and result.status.state:
+                state = result.status.state.value if hasattr(result.status.state, 'value') else str(result.status.state)
+                logger.info("check_table_result", table=full_table_name, state=state)
+                if state == "SUCCEEDED":
+                    logger.info("table_exists", table=full_table_name, exists=True)
+                    return {
+                        "exists": True,
+                        "table": f"`{catalog}`.`{schema}`.`{table}`"
+                    }
+                else:
+                    # Statement didn't succeed - table likely doesn't exist
+                    logger.info("table_exists", table=full_table_name, exists=False, reason="statement_failed")
+                    return {
+                        "exists": False,
+                        "table": f"`{catalog}`.`{schema}`.`{table}`"
+                    }
+            
+            # If we get here, assume table exists (statement completed without error)
+            logger.info("table_exists", table=full_table_name, exists=True, reason="no_error")
+            return {
+                "exists": True,
+                "table": f"`{catalog}`.`{schema}`.`{table}`"
+            }
+        except Exception as e:
+            error_str = str(e)
+            logger.info("check_table_exception", table=full_table_name, error=error_str)
+            if "TABLE_OR_VIEW_NOT_FOUND" in error_str or "cannot be found" in error_str or "does not exist" in error_str:
+                logger.info("table_exists", table=full_table_name, exists=False, reason="not_found_exception")
+                return {
+                    "exists": False,
+                    "table": f"`{catalog}`.`{schema}`.`{table}`"
+                }
+            # For other errors, re-raise
+            raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/tables/create")
+async def create_table(request: dict):
+    """Create a target table based on source table and pattern type"""
+    try:
+        ws = get_workspace_client()
         
-        # Create executor and tracker
-        tracker = ExecutionTracker(host, token, request.warehouse_id)
-        executor = SQLExecutor(host, token, request.warehouse_id, tracker)
+        plan_id = request.get("plan_id")
+        warehouse_id = request.get("warehouse_id")
         
-        # Execute SQL
-        execution_id = await executor.execute_async(
-            plan_id=request.plan_id,
-            plan_version=request.plan_version,
-            sql_statement=request.sql,
-            executor_user=request.executor_user,
-            timeout_seconds=request.timeout_seconds
+        if not all([plan_id, warehouse_id]):
+            raise HTTPException(status_code=400, detail="Missing required fields: plan_id, warehouse_id")
+        
+        # Fetch the plan
+        registry = get_plan_registry()
+        plan = registry.get_plan(plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail=f"Plan {plan_id} not found")
+        
+        # Extract table info
+        source_catalog = plan.get("source", {}).get("catalog")
+        source_schema = plan.get("source", {}).get("schema")
+        source_table = plan.get("source", {}).get("table")
+        target_catalog = plan.get("target", {}).get("catalog")
+        target_schema = plan.get("target", {}).get("schema")
+        target_table = plan.get("target", {}).get("table")
+        pattern_type = plan.get("pattern", {}).get("type")
+        source_columns = plan.get("source", {}).get("columns", [])
+        
+        if not all([source_catalog, source_schema, source_table, target_catalog, target_schema, target_table]):
+            raise HTTPException(status_code=400, detail="Plan missing required source/target information")
+        
+        # First, verify the SOURCE table exists (we need it to create the target)
+        try:
+            ws.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=f"DESCRIBE TABLE `{source_catalog}`.`{source_schema}`.`{source_table}`",
+                wait_timeout="10s"
+            )
+        except Exception as e:
+            error_msg = str(e)
+            if "TABLE_OR_VIEW_NOT_FOUND" in error_msg or "cannot be found" in error_msg:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Source table `{source_catalog}`.`{source_schema}`.`{source_table}` does not exist. "
+                           f"Please ensure the source table exists before creating the target table."
+                )
+            # Re-raise other errors
+            raise HTTPException(status_code=500, detail=f"Error checking source table: {error_msg}")
+        
+        # Build CREATE TABLE statement based on pattern
+        if pattern_type == "SCD2":
+            pattern_config = plan.get("pattern_config", {})
+            effective_date_col = pattern_config.get("effective_date_column", "effective_date")
+            end_date_col = pattern_config.get("end_date_column", "end_date")
+            current_flag_col = pattern_config.get("current_flag_column", "is_current")
+            
+            if source_columns:
+                column_list = ", ".join([f"`{col}`" for col in source_columns])
+            else:
+                column_list = "*"
+            
+            create_table_sql = f"""
+CREATE TABLE IF NOT EXISTS `{target_catalog}`.`{target_schema}`.`{target_table}` AS
+SELECT 
+    {column_list},
+    CURRENT_TIMESTAMP() AS `{effective_date_col}`,
+    CAST('9999-12-31 23:59:59' AS TIMESTAMP) AS `{end_date_col}`,
+    TRUE AS `{current_flag_col}`
+FROM `{source_catalog}`.`{source_schema}`.`{source_table}`
+WHERE 1=0
+"""
+        else:
+            create_table_sql = f"""
+CREATE TABLE IF NOT EXISTS `{target_catalog}`.`{target_schema}`.`{target_table}`
+LIKE `{source_catalog}`.`{source_schema}`.`{source_table}`
+"""
+        
+        # Execute CREATE TABLE
+        result = ws.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=create_table_sql,
+            wait_timeout="30s"
         )
         
         return {
             "success": True,
-            "execution_id": execution_id,
-            "message": "Execution started successfully"
+            "table": f"`{target_catalog}`.`{target_schema}`.`{target_table}`",
+            "statement_id": result.statement_id,
+            "message": "Table created successfully"
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/plans/execute")
+async def execute_plan(request: ExecutionRequest):
+    """Execute a compiled SQL plan with coordinated multi-statement support and tracking"""
+    import structlog
+    logger = structlog.get_logger()
+    
+    execution_record_id = None
+    lakebase = None
+    
+    try:
+        logger.info("execution_request_received", plan_id=request.plan_id, warehouse_id=request.warehouse_id)
+        
+        # Get workspace client (already initialized with OAuth)
+        ws = get_workspace_client()
+        
+        logger.info("splitting_sql_statements", sql_length=len(request.sql))
+        
+        # Split SQL into individual statements
+        # Remove comments and split on semicolons
+        statements = []
+        for line in request.sql.split('\n'):
+            line = line.strip()
+            # Skip comment lines
+            if line.startswith('--') or not line:
+                continue
+            statements.append(line)
+        
+        # Join back and split on semicolons
+        full_sql = ' '.join(statements)
+        sql_statements = [s.strip() for s in full_sql.split(';') if s.strip()]
+        
+        logger.info("executing_statements", count=len(sql_statements))
+        
+        # Get plan details for tracking
+        try:
+            registry = get_plan_registry()
+            plan = registry.get_plan(request.plan_id)
+            plan_name = plan.get("plan_metadata", {}).get("plan_name", "unknown") if plan else "unknown"
+        except:
+            plan_name = "unknown"
+        
+        # Create execution tracking record in Lakebase
+        try:
+            from infrastructure.lakebase_backend import get_lakebase_backend
+            lakebase = get_lakebase_backend()
+            if lakebase:
+                execution_record_id = lakebase.create_execution_record(
+                    plan_id=request.plan_id,
+                    plan_name=plan_name,
+                    plan_version=request.plan_version,
+                    executor_user=request.executor_user,
+                    warehouse_id=request.warehouse_id,
+                    total_statements=len(sql_statements)
+                )
+                logger.info("execution_tracking_started", execution_record_id=execution_record_id)
+                
+                # Update status to RUNNING
+                lakebase.update_execution_status(execution_record_id, "RUNNING")
+        except Exception as track_error:
+            logger.warning("execution_tracking_failed", error=str(track_error))
+            # Continue execution even if tracking fails
+        
+        # Execute each statement sequentially with coordination
+        # Each statement must complete successfully before the next one starts
+        execution_ids = []
+        succeeded_count = 0
+        failed_count = 0
+        
+        for idx, stmt in enumerate(sql_statements):
+            try:
+                logger.info("executing_statement", number=idx+1, length=len(stmt))
+                
+                # Execute and WAIT for completion (max allowed timeout is 50s)
+                # For long-running queries, use 0s to submit and return immediately
+                result = ws.statement_execution.execute_statement(
+                    warehouse_id=request.warehouse_id,
+                    statement=stmt,
+                    wait_timeout="50s"  # Max allowed by Databricks (5-50s range)
+                )
+                
+                # Check if statement completed successfully
+                status = result.status.state.value if result.status else "UNKNOWN"
+                logger.info("statement_executed", 
+                           number=idx+1, 
+                           statement_id=result.statement_id,
+                           status=status)
+                
+                if status not in ["SUCCEEDED", "SUCCESS"]:
+                    # Statement did not complete successfully - get error details
+                    failed_count += 1
+                    
+                    # Try to get error message from result
+                    error_details = "No error details available"
+                    if result.status and hasattr(result.status, 'error'):
+                        error_obj = result.status.error
+                        if error_obj:
+                            error_details = f"{error_obj.error_code}: {error_obj.message}" if hasattr(error_obj, 'message') else str(error_obj)
+                    
+                    error_msg = f"Statement {idx + 1} failed with status {status}. Error: {error_details}"
+                    
+                    logger.error("statement_failed_with_bad_status", 
+                                number=idx+1,
+                                status=status,
+                                statement_id=result.statement_id,
+                                error_details=error_details)
+                    
+                    # Update tracking with failure
+                    if lakebase and execution_record_id:
+                        lakebase.update_execution_status(
+                            execution_record_id, 
+                            "FAILED",
+                            succeeded_statements=succeeded_count,
+                            failed_statements=failed_count,
+                            execution_details={"statements": execution_ids},
+                            error_message=error_msg
+                        )
+                    
+                    raise HTTPException(status_code=500, detail=error_msg)
+                
+                succeeded_count += 1
+                execution_ids.append({
+                    "statement_number": idx + 1,
+                    "statement_id": result.statement_id,
+                    "status": status
+                })
+                
+                logger.info("statement_completed_successfully", number=idx+1)
+                
+            except HTTPException:
+                raise
+            except Exception as stmt_error:
+                failed_count += 1
+                logger.error("statement_execution_failed", 
+                            number=idx+1, 
+                            error=str(stmt_error),
+                            statement_preview=stmt[:200])
+                
+                # Update tracking with failure
+                if lakebase and execution_record_id:
+                    lakebase.update_execution_status(
+                        execution_record_id,
+                        "FAILED",
+                        succeeded_statements=succeeded_count,
+                        failed_statements=failed_count,
+                        execution_details={"statements": execution_ids},
+                        error_message=f"Statement {idx + 1} failed: {str(stmt_error)}"
+                    )
+                
+                # If any statement fails, stop execution and return detailed error
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Statement {idx + 1} failed: {str(stmt_error)}"
+                )
+        
+        logger.info("execution_complete", total_statements=len(sql_statements))
+        
+        # Update tracking with success
+        if lakebase and execution_record_id:
+            lakebase.update_execution_status(
+                execution_record_id,
+                "SUCCEEDED",
+                succeeded_statements=succeeded_count,
+                failed_statements=failed_count,
+                execution_details={"statements": execution_ids}
+            )
+        
+        return {
+            "success": True,
+            "execution_ids": execution_ids,
+            "total_statements": len(sql_statements),
+            "message": f"Successfully executed {len(sql_statements)} statement(s) sequentially",
+            "execution_record_id": execution_record_id
+        }
+    except HTTPException as http_exc:
+        # HTTPException from statement failures - tracking already updated
+        raise
+    except Exception as e:
+        logger.error("execution_failed", error=str(e))
+        
+        # Update tracking with failure if record was created
+        if lakebase and execution_record_id:
+            try:
+                lakebase.update_execution_status(
+                    execution_record_id,
+                    "FAILED",
+                    succeeded_statements=0,
+                    failed_statements=0,
+                    error_message=f"Execution failed: {str(e)}"
+                )
+            except Exception as track_err:
+                logger.error("failed_to_update_tracking", error=str(track_err))
+        
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/executions")
+async def list_executions(
+    limit: int = 50,
+    offset: int = 0,
+    status: str = None,
+    executor_user: str = None
+):
+    """
+    List plan executions with filtering
+    
+    Query Parameters:
+        - limit: Maximum number of records (default: 50)
+        - offset: Offset for pagination (default: 0)
+        - status: Filter by status (SUBMITTED, RUNNING, SUCCEEDED, FAILED, PARTIAL)
+        - executor_user: Filter by executor user email
+    """
+    try:
+        from infrastructure.lakebase_backend import get_lakebase_backend
+        lakebase = get_lakebase_backend()
+        
+        if not lakebase:
+            # Lakebase not available
+            return {
+                "executions": [],
+                "total": 0,
+                "message": "Execution tracking not available (Lakebase not configured)"
+            }
+        
+        executions = lakebase.list_executions(
+            limit=limit,
+            offset=offset,
+            status=status,
+            executor_user=executor_user
+        )
+        
+        return {
+            "executions": executions,
+            "total": len(executions),
+            "limit": limit,
+            "offset": offset
+        }
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -346,14 +795,25 @@ async def save_plan(request: PlanSaveRequest):
                 detail={"message": "Plan validation failed", "errors": errors}
             )
         
-        # In production, save to a plan registry (Unity Catalog or database)
-        # For now, return success
-        plan_id = request.plan.get("plan_id", "generated-plan-id")
+        # Save to plan registry if available
+        if plan_registry_available:
+            try:
+                registry = get_plan_registry()
+                result = registry.save_plan(request.plan)
+                return result
+            except RuntimeError as e:
+                # Lakebase not configured - fall back to in-memory
+                import structlog
+                logger = structlog.get_logger()
+                logger.warning("plan_registry_unavailable_fallback", error=str(e))
+        
+        # Fallback: In-memory only (no persistence)
+        plan_id = request.plan.get("plan_metadata", {}).get("plan_id", "generated-plan-id")
         
         return {
             "success": True,
             "plan_id": plan_id,
-            "message": "Plan saved successfully"
+            "message": "Plan validated successfully (not persisted - enable Lakebase for persistence)"
         }
     except HTTPException:
         raise
@@ -364,8 +824,15 @@ async def save_plan(request: PlanSaveRequest):
 async def list_plans(owner: Optional[str] = None, pattern_type: Optional[str] = None):
     """List all plans with optional filters"""
     try:
-        # In production, fetch from plan registry
-        # For now, return mock data
+        # Use plan registry if available
+        if plan_registry_available:
+            try:
+                registry = get_plan_registry()
+                return registry.list_plans(owner=owner, pattern_type=pattern_type)
+            except RuntimeError:
+                pass  # Fall through to mock data
+        
+        # Fallback: Return mock data
         plans = [
             {
                 "plan_id": "1",
@@ -404,8 +871,19 @@ async def list_plans(owner: Optional[str] = None, pattern_type: Optional[str] = 
 async def get_plan(plan_id: str):
     """Get a specific plan by ID"""
     try:
-        # In production, fetch from plan registry
-        # For now, return mock data
+        # Use plan registry if available
+        if plan_registry_available:
+            try:
+                registry = get_plan_registry()
+                plan = registry.get_plan(plan_id)
+                if plan:
+                    return plan
+                else:
+                    raise HTTPException(status_code=404, detail="Plan not found")
+            except RuntimeError:
+                pass  # Fall through to mock data
+        
+        # Fallback: Return mock data
         if plan_id == "1":
             return {
                 "plan_id": "1",

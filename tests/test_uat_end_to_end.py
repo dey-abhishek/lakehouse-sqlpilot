@@ -122,34 +122,91 @@ def split_sql_statements(sql: str, debug: bool = False) -> list:
 
 def get_databricks_credentials():
     """
-    Helper to get Databricks credentials from secrets manager or env vars
+    Helper to get Databricks credentials using the pre-initialized OAuth token manager.
     
-    Required environment variables:
-    - DATABRICKS_SERVER_HOSTNAME (or DATABRICKS_HOST)
-    - DATABRICKS_TOKEN
-    
-    To run these tests locally:
-    1. Set environment variables:
-       export DATABRICKS_SERVER_HOSTNAME="https://your-workspace.cloud.databricks.com"
-       export DATABRICKS_TOKEN="your-personal-access-token"
-    
-    2. Or create a .env file in the project root with these values
-    
-    3. Or run: python manual_oauth.py (for OAuth flow)
+    This uses the token manager that was created in setup_class BEFORE removing
+    the OAuth env vars, so it can get tokens without triggering browser OAuth.
     """
-    server_hostname = get_secret("DATABRICKS_SERVER_HOSTNAME", os.getenv("DATABRICKS_SERVER_HOSTNAME") or os.getenv("DATABRICKS_HOST"))
-    access_token = get_secret("DATABRICKS_TOKEN", os.getenv("DATABRICKS_TOKEN"))
+    from dotenv import load_dotenv
+    load_dotenv('.env.dev')
     
-    if not server_hostname or not access_token:
-        pytest.skip(
-            "Databricks credentials not configured.\n"
-            "To run these tests, set environment variables:\n"
-            "  export DATABRICKS_SERVER_HOSTNAME='https://your-workspace.cloud.databricks.com'\n"
-            "  export DATABRICKS_TOKEN='your-token'\n"
-            "Or run: python manual_oauth.py for OAuth setup"
+    # Get server hostname
+    server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME") or os.getenv("DATABRICKS_HOST")
+    
+    # If not in environment, load from .env.dev file
+    if not server_hostname:
+        import dotenv
+        env_vars = dotenv.dotenv_values('.env.dev')
+        server_hostname = env_vars.get('DATABRICKS_SERVER_HOSTNAME')
+    
+    if not server_hostname:
+        pytest.skip("DATABRICKS_SERVER_HOSTNAME not configured")
+    
+    # Use the token manager from the test class (created in setup_class)
+    # This was initialized before we removed the OAuth env vars
+    try:
+        from tests.test_uat_end_to_end import TestUATEndToEnd
+        if hasattr(TestUATEndToEnd, '_token_manager'):
+            access_token = TestUATEndToEnd._token_manager.get_token()
+            return server_hostname, access_token
+    except Exception as e:
+        pass
+    
+    # If we get here, something went wrong - should NOT restore env vars!
+    print("  [WARNING] Fallback path should not be used - this may cause browser popup!")
+    pytest.skip("Token manager not initialized properly")
+
+
+def connect_with_token(server_hostname, http_path, access_token):
+    """
+    Create a Databricks SQL connection using ONLY an access token.
+    
+    CRITICAL: Temporarily renames ~/.databrickscfg to prevent the connector
+    from reading OAuth config and triggering browser-based authentication.
+    
+    Usage:
+        with connect_with_token(hostname, http_path, token) as conn:
+            # use connection
+    """
+    import shutil
+    from pathlib import Path
+    
+    # Double-check OAuth env vars are not set
+    if 'DATABRICKS_CLIENT_ID' in os.environ:
+        del os.environ['DATABRICKS_CLIENT_ID']
+    if 'DATABRICKS_CLIENT_SECRET' in os.environ:
+        del os.environ['DATABRICKS_CLIENT_SECRET']
+    
+    # CRITICAL: Temporarily rename ~/.databrickscfg to prevent connector from reading it
+    config_path = Path.home() / '.databrickscfg'
+    backup_path = Path.home() / '.databrickscfg.backup_for_tests'
+    config_existed = config_path.exists()
+    
+    if config_existed:
+        shutil.move(str(config_path), str(backup_path))
+    
+    # Also set DATABRICKS_CONFIG_FILE to ensure it's not used
+    saved_config_file = os.environ.get('DATABRICKS_CONFIG_FILE')
+    os.environ['DATABRICKS_CONFIG_FILE'] = '/dev/null'
+    
+    try:
+        conn = connect(
+            server_hostname=server_hostname,
+            http_path=http_path,
+            access_token=access_token,
+            _user_agent_entry="SQLPilot-UAT-Tests"
         )
-    
-    return server_hostname, access_token
+        return conn
+    finally:
+        # Restore config file
+        if config_existed:
+            shutil.move(str(backup_path), str(config_path))
+        
+        # Restore env var
+        if saved_config_file:
+            os.environ['DATABRICKS_CONFIG_FILE'] = saved_config_file
+        else:
+            os.environ.pop('DATABRICKS_CONFIG_FILE', None)
 
 
 class TestUATEndToEnd:
@@ -158,13 +215,74 @@ class TestUATEndToEnd:
     @classmethod
     def setup_class(cls):
         """Setup test environment"""
-        # Use secrets manager for sensitive values, fallback to env vars
-        cls.warehouse_id = get_secret("DATABRICKS_WAREHOUSE_ID", os.getenv("DATABRICKS_WAREHOUSE_ID", "592f1f39793f7795"))
-        cls.catalog = get_secret("DATABRICKS_CATALOG", os.getenv("DATABRICKS_CATALOG", "lakehouse-sqlpilot"))
-        cls.schema = get_secret("DATABRICKS_SCHEMA", os.getenv("DATABRICKS_SCHEMA", "lakehouse-sqlpilot-schema"))
-        cls.workspace_client = WorkspaceClient()
+        print("\n" + "="*80)
+        print("Setting up UAT Test Environment")
+        print("="*80)
+        
+        from dotenv import load_dotenv
+        import shutil
+        load_dotenv('.env.dev')
+        
+        # CRITICAL: Rename .databrickscfg to prevent SQL connector from detecting OAuth
+        databricks_cfg = os.path.expanduser("~/.databrickscfg")
+        databricks_cfg_backup = os.path.expanduser("~/.databrickscfg.uat_backup")
+        
+        cls._databricks_cfg_existed = os.path.exists(databricks_cfg)
+        if cls._databricks_cfg_existed:
+            shutil.move(databricks_cfg, databricks_cfg_backup)
+        
+        # Get configuration directly from environment (already loaded from .env.dev)
+        cls.warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
+        cls.catalog = os.getenv("DATABRICKS_CATALOG", "lakehouse-sqlpilot")
+        cls.schema = os.getenv("DATABRICKS_SCHEMA", "lakehouse-sqlpilot-schema")
+        
+        if not cls.warehouse_id:
+            pytest.skip("DATABRICKS_WAREHOUSE_ID not configured in .env.dev")
+        
+        # Initialize WorkspaceClient with OAuth credentials from environment
+        server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+        client_id = os.getenv("DATABRICKS_CLIENT_ID")
+        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        
+        if not all([server_hostname, client_id, client_secret]):
+            pytest.skip("Databricks credentials not configured in .env.dev")
+        
+        # Save credentials for later use
+        cls._server_hostname = server_hostname
+        cls._client_id = client_id
+        cls._client_secret = client_secret
+        
+        # IMPORTANT: Generate OAuth token BEFORE removing env vars
+        from infrastructure.oauth_token_manager import get_oauth_token_manager
+        cls._token_manager = get_oauth_token_manager()
+        
+        # Create WorkspaceClient BEFORE removing env vars
+        cls.workspace_client = WorkspaceClient(
+            host=f"https://{server_hostname}",
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # CRITICAL: NOW remove OAuth env vars to prevent SQL connector from using them
+        # The token manager and WorkspaceClient are already initialized
+        os.environ.pop('DATABRICKS_CLIENT_ID', None)
+        os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
+        os.environ.pop('DATABRICKS_AZURE_CLIENT_ID', None)
+        os.environ.pop('DATABRICKS_AZURE_CLIENT_SECRET', None)
+        
         cls.compiler = SQLCompiler("plan-schema/v1/plan.schema.json")
         cls.validator = PlanValidator("plan-schema/v1/plan.schema.json")
+        
+        print("✓ Setup complete\n")
+    
+    @classmethod
+    def teardown_class(cls):
+        """Restore environment after all tests"""
+        # Restore OAuth env vars
+        if hasattr(cls, '_client_id') and cls._client_id:
+            os.environ['DATABRICKS_CLIENT_ID'] = cls._client_id
+        if hasattr(cls, '_client_secret') and cls._client_secret:
+            os.environ['DATABRICKS_CLIENT_SECRET'] = cls._client_secret
         
     def test_1_warehouse_connectivity(self):
         """UAT-1: Verify warehouse is accessible and can execute queries"""
@@ -173,11 +291,14 @@ class TestUATEndToEnd:
         print("="*80)
         
         try:
-            # Get credentials from secrets manager
-            server_hostname = get_secret("DATABRICKS_SERVER_HOSTNAME", os.getenv("DATABRICKS_SERVER_HOSTNAME"))
-            access_token = get_secret("DATABRICKS_TOKEN", os.getenv("DATABRICKS_TOKEN"))
+            # Get OAuth token from token manager
+            from infrastructure.oauth_token_manager import get_oauth_token_manager
             
-            with connect(
+            token_manager = get_oauth_token_manager()
+            access_token = token_manager.get_token()
+            server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+            
+            with connect_with_token(
                 server_hostname=server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=access_token
@@ -197,11 +318,14 @@ class TestUATEndToEnd:
         print("="*80)
         
         try:
-            # Get credentials from secrets manager
-            server_hostname = get_secret("DATABRICKS_SERVER_HOSTNAME", os.getenv("DATABRICKS_SERVER_HOSTNAME"))
-            access_token = get_secret("DATABRICKS_TOKEN", os.getenv("DATABRICKS_TOKEN"))
+            # Get OAuth token from token manager
+            from infrastructure.oauth_token_manager import get_oauth_token_manager
             
-            with connect(
+            token_manager = get_oauth_token_manager()
+            access_token = token_manager.get_token()
+            server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+            
+            with connect_with_token(
                 server_hostname=server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=access_token
@@ -348,14 +472,23 @@ class TestUATEndToEnd:
         print("UAT-5: Creating Test Tables")
         print("="*80)
         
+        # DEBUG: Print warehouse ID
+        print(f"DEBUG: self.warehouse_id = [{self.warehouse_id}]")
+        print(f"DEBUG: warehouse_id repr = {repr(self.warehouse_id)}")
+        print(f"DEBUG: warehouse_id length = {len(self.warehouse_id)}")
+        
         try:
             # Use catalog and schema names directly (they have hyphens, SQL uses backticks)
             catalog_fmt = self.catalog
             schema_fmt = self.schema
-            # Get credentials
-            server_hostname, access_token = get_databricks_credentials()
             
-            with connect(
+            # Use token manager from setup_class
+            access_token = self._token_manager.get_token()
+            server_hostname = self._server_hostname
+            
+            print(f"DEBUG: http_path = /sql/1.0/warehouses/{self.warehouse_id}")
+            
+            with connect_with_token(
                 server_hostname=server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=access_token
@@ -450,7 +583,7 @@ VALUES (
                 print(f"⚠️  Spark codegen warning (can be ignored): {error_msg[:100]}...")
                 # Verify tables were created despite the warning
                 try:
-                    with connect(
+                    with connect_with_token(
                         server_hostname=server_hostname,
                         http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                         access_token=access_token
@@ -534,12 +667,17 @@ VALUES (
             print(f"\n--- Generated SQL ---\n{sql}\n--- End SQL ---\n")
             
             # Execute SQL on warehouse
+            # Get OAuth token for authentication
+            from infrastructure.oauth_token_manager import get_oauth_token_manager
+            token_manager = get_oauth_token_manager()
+            access_token = token_manager.get_token()
+            
             # FIX C: Connection 1 - Check and setup test data if needed
             print("\n✓ Opening connection 1: Setup/verification...")
-            with connect(
+            with connect_with_token(
                 server_hostname=os.getenv("DATABRICKS_SERVER_HOSTNAME"),
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-                access_token=os.getenv("DATABRICKS_TOKEN")
+                access_token=access_token
             ) as setup_connection:
                 with setup_connection.cursor() as setup_cursor:
                     catalog_fmt = self.catalog
@@ -616,10 +754,10 @@ VALUES (
                     
             # FIX C: Use separate connection for SCD2 execution (clean session)
             print("\n✓ Opening clean connection for SCD2 execution...")
-            with connect(
+            with connect_with_token(
                 server_hostname=os.getenv("DATABRICKS_SERVER_HOSTNAME"),
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-                access_token=os.getenv("DATABRICKS_TOKEN")
+                access_token=access_token
             ) as scd2_connection:
                 with scd2_connection.cursor() as scd2_cursor:
                     catalog_fmt = self.catalog
@@ -711,10 +849,10 @@ VALUES (
             
             # FIX C: Use separate connection for validation (clean session)
             print("\n✓ Opening clean connection for validation...")
-            with connect(
+            with connect_with_token(
                 server_hostname=os.getenv("DATABRICKS_SERVER_HOSTNAME"),
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-                access_token=os.getenv("DATABRICKS_TOKEN")
+                access_token=access_token  # Use the same token from earlier in this test
             ) as validation_connection:
                 with validation_connection.cursor() as validation_cursor:
                     # Verify results (use original names with hyphens)
@@ -1146,7 +1284,7 @@ VALUES (
             statements = split_sql_statements(sql)
             print(f"  ℹ️  Executing {len(statements)} SQL statements...")
             
-            with connect(
+            with connect_with_token(
                 server_hostname=server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=access_token
@@ -1175,10 +1313,12 @@ VALUES (
             # Use catalog and schema names directly (they have hyphens, SQL uses backticks)
             catalog_fmt = self.catalog
             schema_fmt = self.schema
-            # Get credentials
-            server_hostname, access_token = get_databricks_credentials()
             
-            with connect(
+            # Use token manager from setup_class
+            access_token = self._token_manager.get_token()
+            server_hostname = self._server_hostname
+            
+            with connect_with_token(
                 server_hostname=server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=access_token
@@ -1367,13 +1507,17 @@ VALUES (
     def teardown_class(cls):
         """Cleanup test tables"""
         print("\n" + "="*80)
-        print("Cleanup: Removing Test Tables")
+        print("Cleaning up test tables")
         print("="*80)
+        
         try:
-            with connect(
-                server_hostname=os.getenv("DATABRICKS_SERVER_HOSTNAME"),
+            # Use the token manager we created in setup_class
+            access_token = cls._token_manager.get_token() if hasattr(cls, '_token_manager') else None
+            
+            with connect_with_token(
+                server_hostname=cls._server_hostname if hasattr(cls, '_server_hostname') else os.getenv("DATABRICKS_SERVER_HOSTNAME"),
                 http_path=f"/sql/1.0/warehouses/{cls.warehouse_id}",
-                access_token=os.getenv("DATABRICKS_TOKEN")
+                access_token=access_token
             ) as connection:
                 with connection.cursor() as cursor:
                     # Use original names with hyphens (enclosed in backticks)
@@ -1381,9 +1525,23 @@ VALUES (
                     schema_fmt = cls.schema
                     cursor.execute(f"DROP TABLE IF EXISTS `{catalog_fmt}`.`{schema_fmt}`.`customers_source`")
                     cursor.execute(f"DROP TABLE IF EXISTS `{catalog_fmt}`.`{schema_fmt}`.`customers_dim`")
-                    print("✓ Cleaned up test tables")
+                    print("✓ Test tables cleaned up")
         except:
             pass
+        
+        # NOW restore everything AFTER cleanup is done
+        import shutil
+        databricks_cfg = os.path.expanduser("~/.databrickscfg")
+        databricks_cfg_backup = os.path.expanduser("~/.databrickscfg.uat_backup")
+        if hasattr(cls, '_databricks_cfg_existed') and cls._databricks_cfg_existed:
+            if os.path.exists(databricks_cfg_backup):
+                shutil.move(databricks_cfg_backup, databricks_cfg)
+        
+        # Restore OAuth env vars
+        if hasattr(cls, '_client_id') and cls._client_id:
+            os.environ['DATABRICKS_CLIENT_ID'] = cls._client_id
+        if hasattr(cls, '_client_secret') and cls._client_secret:
+            os.environ['DATABRICKS_CLIENT_SECRET'] = cls._client_secret
 
 
 if __name__ == "__main__":

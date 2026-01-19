@@ -18,14 +18,39 @@ from contextlib import contextmanager
 
 logger = structlog.get_logger()
 
-# Try to import Lakebase OAuth manager (optional)
+# Import Smart Credential Manager for multi-method fallback
 try:
-    from infrastructure.lakebase_oauth import get_lakebase_password
-    LAKEBASE_OAUTH_AVAILABLE = True
+    from infrastructure.smart_credentials import (
+        get_smart_credential_manager,
+        get_lakebase_credentials_with_fallback
+    )
+    SMART_CREDENTIALS_AVAILABLE = True
+    logger.info("lakebase_smart_credentials_available",
+               message="Using smart credential manager with automatic fallback")
 except ImportError:
-    LAKEBASE_OAUTH_AVAILABLE = False
-    logger.warning("lakebase_oauth_not_available", 
-                   message="OAuth auto-refresh not available for Lakebase")
+    SMART_CREDENTIALS_AVAILABLE = False
+    logger.warning("lakebase_smart_credentials_not_available")
+
+# Also try to import individual methods for backward compatibility
+try:
+    from infrastructure.lakebase_credentials import get_lakebase_password, get_lakebase_username
+    LAKEBASE_AUTO_REFRESH_AVAILABLE = True
+    CREDENTIAL_METHOD = "database_api"
+    logger.info("lakebase_credential_api_available", 
+               message="Using Databricks Database Credential API for auto-refresh")
+except ImportError:
+    try:
+        from infrastructure.lakebase_oauth import get_lakebase_password
+        get_lakebase_username = None
+        LAKEBASE_AUTO_REFRESH_AVAILABLE = True
+        CREDENTIAL_METHOD = "oauth"
+        logger.info("lakebase_oauth_available", 
+                   message="Using OAuth for Lakebase authentication")
+    except ImportError:
+        LAKEBASE_AUTO_REFRESH_AVAILABLE = False
+        CREDENTIAL_METHOD = None
+        logger.warning("lakebase_auto_refresh_not_available", 
+                       message="Neither Database Credential API nor OAuth available - using static credentials")
 
 
 class LakebaseBackend:
@@ -51,7 +76,7 @@ class LakebaseBackend:
     def __init__(self, 
                  host: Optional[str] = None,
                  port: int = 5432,
-                 database: str = "sqlpilot_state",
+                 database: Optional[str] = None,
                  user: Optional[str] = None,
                  password: Optional[str] = None,
                  use_oauth: bool = True,
@@ -63,7 +88,7 @@ class LakebaseBackend:
         Args:
             host: Lakebase Postgres host
             port: Database port (default 5432)
-            database: Database name
+            database: Database name (defaults to LAKEBASE_DATABASE env var or "databricks_postgres")
             user: Database user
             password: Database password (or will use OAuth if use_oauth=True)
             use_oauth: Use OAuth auto-refresh for password (recommended)
@@ -73,29 +98,75 @@ class LakebaseBackend:
         # Get credentials from environment
         self.host = host or os.getenv("LAKEBASE_HOST")
         self.port = port
-        self.database = database
+        self.database = database or os.getenv("LAKEBASE_DATABASE") or "databricks_postgres"
         self.user = user or os.getenv("LAKEBASE_USER")
-        self.use_oauth = use_oauth and LAKEBASE_OAUTH_AVAILABLE
+        self.use_auto_refresh = use_oauth and (LAKEBASE_AUTO_REFRESH_AVAILABLE or SMART_CREDENTIALS_AVAILABLE)
+        self.credential_method = CREDENTIAL_METHOD if self.use_auto_refresh else None
+        self.use_smart_fallback = SMART_CREDENTIALS_AVAILABLE
         
-        # Get password: OAuth (preferred) or static
-        if self.use_oauth:
+        # Get password: Use smart credential manager with automatic fallback
+        if self.use_auto_refresh:
             try:
-                self.password = get_lakebase_password()
-                logger.info("lakebase_using_oauth_password", 
-                           message="OAuth auto-refresh enabled for Lakebase")
+                if self.use_smart_fallback:
+                    # Use smart credential manager with automatic fallback
+                    logger.info("lakebase_using_smart_credentials",
+                               message="Using smart credential manager with multi-method fallback")
+                    self.user, self.password = get_lakebase_credentials_with_fallback()
+                    manager = get_smart_credential_manager()
+                    self.credential_method = manager.get_last_successful_method()
+                    logger.info("lakebase_smart_credentials_success",
+                               method=self.credential_method,
+                               message=f"Credentials obtained via {self.credential_method}")
+                else:
+                    # Use individual method (backward compatibility)
+                    self.password = get_lakebase_password()
+                    # Try to get dynamic username if available (Database API provides it)
+                    if get_lakebase_username:
+                        self.user = get_lakebase_username()
+                    logger.info("lakebase_using_auto_refresh", 
+                               method=self.credential_method,
+                               message=f"Auto-refresh enabled via {self.credential_method}")
             except Exception as e:
-                logger.warning("lakebase_oauth_failed_fallback_to_static",
-                              error=str(e))
-                self.password = password or os.getenv("LAKEBASE_PASSWORD")
-                self.use_oauth = False
+                logger.error("lakebase_auto_refresh_failed",
+                            method=self.credential_method,
+                            error=str(e))
+                # If explicit password provided, use it as last resort
+                if password:
+                    self.password = password
+                    self.use_auto_refresh = False
+                    self.credential_method = "explicit"
+                    logger.warning("lakebase_using_explicit_password",
+                                  message="Using explicitly provided password")
+                else:
+                    raise ValueError(
+                        "Failed to obtain Lakebase credentials via auto-refresh. "
+                        f"Error: {str(e)}. "
+                        "Ensure DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET are configured."
+                    )
         else:
-            self.password = password or os.getenv("LAKEBASE_PASSWORD")
+            # use_oauth=False - explicit password required
+            self.password = password
+            if not self.password:
+                raise ValueError(
+                    "Lakebase password required when use_oauth=False. "
+                    "Either provide password parameter or enable auto-refresh with use_oauth=True"
+                )
+            self.credential_method = "explicit"
         
         if not all([self.host, self.user, self.password]):
+            missing = []
+            if not self.host:
+                missing.append("LAKEBASE_HOST")
+            if not self.user:
+                missing.append("LAKEBASE_USER")
+            if not self.password:
+                missing.append("password (via Database Credential API or explicit parameter)")
+            
             raise ValueError(
-                "Lakebase credentials not configured. "
-                "Set LAKEBASE_HOST, LAKEBASE_USER, LAKEBASE_PASSWORD "
-                "or configure OAuth (OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN)"
+                f"Lakebase credentials not configured. Missing: {', '.join(missing)}. "
+                "For auto-refresh (recommended), ensure: "
+                "DATABRICKS_SERVER_HOSTNAME, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, "
+                "LAKEBASE_INSTANCE_NAME, LAKEBASE_HOST, and LAKEBASE_USER are set."
             )
         
         # Create connection pool
@@ -131,164 +202,153 @@ class LakebaseBackend:
     
     @contextmanager
     def _get_connection(self):
-        """Context manager for getting and returning connections"""
-        conn = self.pool.getconn()
-        try:
-            yield conn
-        finally:
-            self.pool.putconn(conn)
-    
-    def _initialize_schema(self):
-        """Create tables if they don't exist"""
-        with self._get_connection() as conn:
+        """
+        Context manager for getting and returning connections
+        
+        Includes automatic retry with credential refresh on auth failures
+        """
+        max_retries = 2
+        last_error = None
+        
+        for attempt in range(max_retries):
             try:
-                with conn.cursor() as cur:
-                    # Enable JSONB extension
-                    cur.execute("CREATE EXTENSION IF NOT EXISTS btree_gin")
-                    
-                    # Create rate_limits table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS rate_limits (
-                            client_id VARCHAR(255) PRIMARY KEY,
-                            request_timestamps JSONB NOT NULL,
-                            window_seconds INT NOT NULL DEFAULT 60,
-                            limit_requests INT NOT NULL DEFAULT 100,
-                            last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_rate_limits_last_updated 
-                        ON rate_limits(last_updated)
-                    """)
-                    
-                    # Create auth_sessions table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS auth_sessions (
-                            session_id VARCHAR(255) PRIMARY KEY,
-                            user_email VARCHAR(255) NOT NULL,
-                            user_info JSONB NOT NULL,
-                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL,
-                            last_activity TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_auth_sessions_user 
-                        ON auth_sessions(user_email)
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires 
-                        ON auth_sessions(expires_at)
-                    """)
-                    
-                    # Create token_cache table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS token_cache (
-                            token_hash VARCHAR(64) PRIMARY KEY,
-                            user_info JSONB NOT NULL,
-                            token_type VARCHAR(50) NOT NULL,
-                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_token_cache_expires 
-                        ON token_cache(expires_at)
-                    """)
-                    
-                    # Create failed_auth_attempts table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS failed_auth_attempts (
-                            id SERIAL PRIMARY KEY,
-                            client_ip VARCHAR(45) NOT NULL,
-                            attempt_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            reason VARCHAR(255)
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_failed_auth_client_time 
-                        ON failed_auth_attempts(client_ip, attempt_time)
-                    """)
-                    
-                    # Create circuit_breaker_state table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS circuit_breaker_state (
-                            service_name VARCHAR(100) PRIMARY KEY,
-                            state VARCHAR(20) NOT NULL,
-                            failure_count INT NOT NULL DEFAULT 0,
-                            last_failure_time TIMESTAMP,
-                            last_state_change TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            metadata JSONB
-                        )
-                    """)
-                    
-                    # Create unity_catalog_cache table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS unity_catalog_cache (
-                            cache_key VARCHAR(500) PRIMARY KEY,
-                            cache_type VARCHAR(50) NOT NULL,
-                            cache_value JSONB NOT NULL,
-                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_catalog_cache_type_expires 
-                        ON unity_catalog_cache(cache_type, expires_at)
-                    """)
-                    
-                    # Create plan_cache table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS plan_cache (
-                            plan_id VARCHAR(255) PRIMARY KEY,
-                            plan_data JSONB NOT NULL,
-                            compiled_sql TEXT,
-                            validation_result JSONB,
-                            owner_email VARCHAR(255),
-                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            accessed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            access_count INT NOT NULL DEFAULT 0
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_plan_cache_owner 
-                        ON plan_cache(owner_email)
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_plan_cache_accessed 
-                        ON plan_cache(accessed_at)
-                    """)
-                    
-                    # Create execution_metrics table
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS execution_metrics (
-                            metric_id SERIAL PRIMARY KEY,
-                            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            endpoint VARCHAR(255) NOT NULL,
-                            method VARCHAR(10) NOT NULL,
-                            status_code INT NOT NULL,
-                            response_time_ms INT NOT NULL,
-                            user_email VARCHAR(255),
-                            error_message TEXT
-                        )
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_metrics_timestamp 
-                        ON execution_metrics(timestamp)
-                    """)
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_metrics_endpoint 
-                        ON execution_metrics(endpoint)
-                    """)
-                    
-                    conn.commit()
-                    logger.info("lakebase_schema_initialized")
+                conn = self.pool.getconn()
+                try:
+                    yield conn
+                    return  # Success!
+                finally:
+                    self.pool.putconn(conn)
                     
             except Exception as e:
-                conn.rollback()
-                logger.error("lakebase_schema_init_failed", error=str(e))
+                last_error = e
+                error_str = str(e).lower()
+                
+                # Check if it's an authentication error
+                is_auth_error = any(indicator in error_str for indicator in [
+                    'invalid authorization',
+                    'authentication failed',
+                    'password authentication failed',
+                    'fatal: invalid',
+                    'could not connect to server'
+                ])
+                
+                if is_auth_error and attempt < max_retries - 1:
+                    logger.warning(
+                        "lakebase_connection_auth_error_retrying",
+                        attempt=attempt + 1,
+                        error=str(e)[:200],
+                        message="Authentication error detected, refreshing credentials"
+                    )
+                    
+                    # Try to refresh credentials with fallback
+                    try:
+                        self._refresh_credentials_with_fallback()
+                        logger.info("lakebase_credentials_refreshed_after_auth_error",
+                                   method=self.credential_method)
+                        # Continue to next retry attempt
+                        continue
+                    except Exception as refresh_error:
+                        logger.error("lakebase_credential_refresh_failed",
+                                    error=str(refresh_error))
+                        # Fall through to raise original error
+                
+                # If not an auth error, or refresh failed, or last attempt, raise
                 raise
+        
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
     
+    def _refresh_credentials_with_fallback(self):
+        """
+        Refresh credentials using smart fallback mechanism
+        
+        This method tries to get fresh credentials and reconnect the pool.
+        It uses the smart credential manager to try all available methods.
+        """
+        try:
+            if self.use_smart_fallback and SMART_CREDENTIALS_AVAILABLE:
+                # Use smart credential manager with automatic fallback
+                logger.info("refreshing_credentials_with_smart_fallback")
+                manager = get_smart_credential_manager()
+                new_username, new_password = manager.get_credentials()
+                self.credential_method = manager.get_last_successful_method()
+                
+            elif self.use_auto_refresh and LAKEBASE_AUTO_REFRESH_AVAILABLE:
+                # Use individual method
+                logger.info("refreshing_credentials_with_auto_refresh",
+                           method=self.credential_method)
+                new_password = get_lakebase_password()
+                new_username = get_lakebase_username() if get_lakebase_username else self.user
+                
+            else:
+                # Try static credentials as last resort
+                logger.info("refreshing_credentials_from_environment")
+                new_username = os.getenv("LAKEBASE_USER")
+                new_password = os.getenv("LAKEBASE_PASSWORD")
+                self.credential_method = "static"
+            
+            if not new_username or not new_password:
+                raise ValueError("No valid credentials available")
+            
+            # Store pool config
+            min_conn = self.pool.minconn
+            max_conn = self.pool.maxconn
+            
+            # Close existing pool
+            if hasattr(self, 'pool') and self.pool:
+                logger.info("closing_existing_connection_pool")
+                self.pool.closeall()
+            
+            # Create new pool with fresh credentials
+            self.user = new_username
+            self.password = new_password
+            self.pool = ThreadedConnectionPool(
+                min_conn,
+                max_conn,
+                host=self.host,
+                port=self.port,
+                dbname=self.database,
+                user=self.user,
+                password=self.password,
+                sslmode='require'
+            )
+            
+            logger.info("lakebase_credentials_refreshed_successfully",
+                       method=self.credential_method)
+            
+        except Exception as e:
+            logger.error("credential_refresh_failed", error=str(e))
+            raise
+    
+    def _initialize_schema(self):
+        """Create tables if they don't exist - gracefully handle existing tables"""
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if all tables exist first
+                cur.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name IN ('rate_limits', 'auth_sessions', 'token_cache', 
+                                      'failed_auth_attempts', 'unity_catalog_cache', 
+                                      'circuit_breaker_state', 'execution_metrics', 
+                                      'plan_cache', 'plans', 'plan_executions')
+                """)
+                existing_tables = cur.fetchone()[0]
+                
+                if existing_tables >= 10:
+                    # All core tables exist, skip initialization entirely
+                    logger.info("lakebase_schema_already_initialized", 
+                               existing_tables=existing_tables,
+                               message="All tables exist, skipping schema initialization")
+                    return
+                
+                # Some tables missing - just log and continue
+                # Don't try to create them since we don't have ownership
+                logger.info("lakebase_schema_incomplete", 
+                           existing_tables=existing_tables,
+                           message=f"Only {existing_tables}/10 tables exist - assuming tables managed externally")
+
     def _schedule_cleanup(self):
         """Schedule periodic cleanup of expired data"""
         # Note: In production, this should be a scheduled job or cron
@@ -886,28 +946,30 @@ class LakebaseBackend:
     
     def refresh_oauth_password(self):
         """
-        Refresh OAuth password and reconnect pool
+        Refresh credentials and reconnect pool
         
-        This method should be called periodically (every ~45 min) to refresh
-        the OAuth token used as the database password.
+        Works with both Database Credential API and OAuth.
+        This method should be called periodically if not using auto-refresh.
         
         Note: This will close existing connections and create new ones.
               Use during maintenance windows or low-traffic periods if possible.
         """
-        if not self.use_oauth:
+        if not self.use_auto_refresh:
             logger.warning("lakebase_refresh_skipped", 
-                          message="OAuth not enabled for this instance")
+                          message="Auto-refresh not enabled for this instance")
             return
         
-        if not LAKEBASE_OAUTH_AVAILABLE:
-            logger.error("lakebase_oauth_not_available")
+        if not LAKEBASE_AUTO_REFRESH_AVAILABLE:
+            logger.error("lakebase_auto_refresh_not_available")
             return
         
         try:
-            logger.info("refreshing_lakebase_connection_with_new_oauth_token")
+            logger.info("refreshing_lakebase_connection_with_new_credentials",
+                       method=self.credential_method)
             
-            # Get fresh OAuth token
+            # Get fresh credentials
             new_password = get_lakebase_password()
+            new_username = get_lakebase_username() if get_lakebase_username else self.user
             
             # Store pool config
             min_conn = self.pool.minconn
@@ -917,8 +979,9 @@ class LakebaseBackend:
             if hasattr(self, 'pool') and self.pool:
                 self.pool.closeall()
             
-            # Create new pool with fresh token
+            # Create new pool with fresh credentials
             self.password = new_password
+            self.user = new_username
             self.pool = ThreadedConnectionPool(
                 min_conn,
                 max_conn,
@@ -930,11 +993,209 @@ class LakebaseBackend:
                 sslmode='require'
             )
             
-            logger.info("lakebase_connection_refreshed_with_new_token")
+            logger.info("lakebase_connection_refreshed_with_new_token",
+                       method=self.credential_method)
             
         except Exception as e:
             logger.error("lakebase_oauth_refresh_failed", error=str(e))
             raise
+    
+    # Plan Execution Tracking Methods
+    def create_execution_record(self, plan_id: str, plan_name: str, plan_version: str,
+                                executor_user: str, warehouse_id: str, total_statements: int) -> int:
+        """
+        Create a new execution record
+        
+        Returns:
+            execution_id (int)
+        """
+        with self._get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO plan_executions 
+                        (plan_id, plan_name, plan_version, executor_user, warehouse_id, 
+                         status, total_statements, execution_details)
+                        VALUES (%s, %s, %s, %s, %s, 'SUBMITTED', %s, %s)
+                        RETURNING execution_id
+                    """, (plan_id, plan_name, plan_version, executor_user, warehouse_id, 
+                          total_statements, json.dumps({"statements": []})))
+                    
+                    execution_id = cur.fetchone()[0]
+                    conn.commit()
+                    
+                    logger.info("execution_record_created", 
+                               execution_id=execution_id,
+                               plan_id=plan_id)
+                    return execution_id
+                    
+            except Exception as e:
+                conn.rollback()
+                logger.error("create_execution_record_failed", error=str(e))
+                raise
+    
+    def update_execution_status(self, execution_id: int, status: str, 
+                                succeeded_statements: int = 0, failed_statements: int = 0,
+                                execution_details: dict = None, error_message: str = None):
+        """
+        Update execution status
+        
+        Args:
+            execution_id: Execution record ID
+            status: Status (SUBMITTED, RUNNING, SUCCEEDED, FAILED, PARTIAL)
+            succeeded_statements: Number of successfully executed statements
+            failed_statements: Number of failed statements
+            execution_details: Detailed execution info (statement IDs, etc.)
+            error_message: Error message if failed
+        """
+        with self._get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    if status in ['SUCCEEDED', 'FAILED', 'PARTIAL']:
+                        # Execution completed
+                        cur.execute("""
+                            UPDATE plan_executions
+                            SET status = %s,
+                                succeeded_statements = %s,
+                                failed_statements = %s,
+                                execution_details = %s,
+                                error_message = %s,
+                                completed_at = CURRENT_TIMESTAMP
+                            WHERE execution_id = %s
+                        """, (status, succeeded_statements, failed_statements,
+                              json.dumps(execution_details) if execution_details else None,
+                              error_message, execution_id))
+                    else:
+                        # Execution in progress
+                        cur.execute("""
+                            UPDATE plan_executions
+                            SET status = %s,
+                                succeeded_statements = %s,
+                                failed_statements = %s,
+                                execution_details = %s
+                            WHERE execution_id = %s
+                        """, (status, succeeded_statements, failed_statements,
+                              json.dumps(execution_details) if execution_details else None,
+                              execution_id))
+                    
+                    conn.commit()
+                    logger.info("execution_status_updated",
+                               execution_id=execution_id,
+                               status=status)
+                    
+            except Exception as e:
+                conn.rollback()
+                logger.error("update_execution_status_failed",
+                            execution_id=execution_id,
+                            error=str(e))
+                raise
+    
+    def get_execution_record(self, execution_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a single execution record
+        
+        Returns:
+            Dict with execution details or None
+        """
+        with self._get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT execution_id, plan_id, plan_name, plan_version,
+                               executor_user, warehouse_id, status, started_at,
+                               completed_at, total_statements, succeeded_statements,
+                               failed_statements, execution_details, error_message
+                        FROM plan_executions
+                        WHERE execution_id = %s
+                    """, (execution_id,))
+                    
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    
+                    return {
+                        "execution_id": row[0],
+                        "plan_id": row[1],
+                        "plan_name": row[2],
+                        "plan_version": row[3],
+                        "executor_user": row[4],
+                        "warehouse_id": row[5],
+                        "status": row[6],
+                        "started_at": row[7].isoformat() if row[7] else None,
+                        "completed_at": row[8].isoformat() if row[8] else None,
+                        "total_statements": row[9],
+                        "succeeded_statements": row[10],
+                        "failed_statements": row[11],
+                        "execution_details": row[12],
+                        "error_message": row[13]
+                    }
+                    
+            except Exception as e:
+                logger.error("get_execution_record_failed",
+                            execution_id=execution_id,
+                            error=str(e))
+                return None
+    
+    def list_executions(self, limit: int = 50, offset: int = 0,
+                       status: str = None, executor_user: str = None) -> List[Dict[str, Any]]:
+        """
+        List execution records with filtering
+        
+        Args:
+            limit: Maximum number of records
+            offset: Offset for pagination
+            status: Filter by status
+            executor_user: Filter by user
+            
+        Returns:
+            List of execution records
+        """
+        with self._get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    query = """
+                        SELECT execution_id, plan_id, plan_name, plan_version,
+                               executor_user, warehouse_id, status, started_at,
+                               completed_at, total_statements, succeeded_statements,
+                               failed_statements, error_message
+                        FROM plan_executions
+                        WHERE 1=1
+                    """
+                    params = []
+                    
+                    if status:
+                        query += " AND status = %s"
+                        params.append(status)
+                    
+                    if executor_user:
+                        query += " AND executor_user = %s"
+                        params.append(executor_user)
+                    
+                    query += " ORDER BY started_at DESC LIMIT %s OFFSET %s"
+                    params.extend([limit, offset])
+                    
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    
+                    return [{
+                        "execution_id": row[0],
+                        "plan_id": row[1],
+                        "plan_name": row[2],
+                        "plan_version": row[3],
+                        "executor_user": row[4],
+                        "warehouse_id": row[5],
+                        "status": row[6],
+                        "started_at": row[7].isoformat() if row[7] else None,
+                        "completed_at": row[8].isoformat() if row[8] else None,
+                        "total_statements": row[9],
+                        "succeeded_statements": row[10],
+                        "failed_statements": row[11],
+                        "error_message": row[12]
+                    } for row in rows]
+                    
+            except Exception as e:
+                logger.error("list_executions_failed", error=str(e))
+                return []
 
 
 # Global instance (lazy initialization)

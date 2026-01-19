@@ -23,50 +23,31 @@ def client():
 class TestExecutionEndpoints:
     """Test plan execution endpoints"""
     
-    @patch('api.main.SQLExecutor')
-    @patch('api.main.ExecutionTracker')
-    @patch('os.getenv')
-    def test_execute_plan_success(self, mock_getenv, mock_tracker_class, mock_executor_class, client):
+    @patch('api.main.get_workspace_client')
+    @patch('infrastructure.lakebase_backend.get_lakebase_backend')
+    @patch('plan_registry.get_plan_registry')
+    def test_execute_plan_success(self, mock_registry, mock_lakebase, mock_ws_client, client):
         """Test successful plan execution"""
-        # Mock environment variables
-        def getenv_side_effect(key, default=""):
-            env_vars = {
-                "DATABRICKS_HOST": "https://test.databricks.com",
-                "DATABRICKS_TOKEN": "test_token",
-                "DATABRICKS_WAREHOUSE_ID": "wh-123"
-            }
-            return env_vars.get(key, default)
+        # Mock workspace client with statement execution
+        mock_ws = MagicMock()
+        mock_result = MagicMock()
+        mock_result.statement_id = "stmt-123"
+        mock_result.status.state.value = "SUCCEEDED"
+        mock_ws.statement_execution.execute_statement.return_value = mock_result
+        mock_ws_client.return_value = mock_ws
         
-        mock_getenv.side_effect = getenv_side_effect
+        # Mock Lakebase backend
+        mock_lakebase_instance = MagicMock()
+        mock_lakebase_instance.create_execution_record.return_value = 42
+        mock_lakebase.return_value = mock_lakebase_instance
         
-        # Mock executor and tracker
-        mock_executor_instance = MagicMock()
-        mock_executor_instance.execute_async = AsyncMock(return_value="exec-123")
-        mock_executor_class.return_value = mock_executor_instance
-        
-        mock_tracker_instance = MagicMock()
-        mock_tracker_class.return_value = mock_tracker_instance
-        
-        request = {
-            "plan_id": "plan-123",
-            "plan_version": "1.0.0",
-            "sql": "INSERT INTO table SELECT * FROM source",
-            "warehouse_id": "wh-123",
-            "executor_user": "test@databricks.com",
-            "timeout_seconds": 300
+        # Mock plan registry
+        mock_registry_instance = MagicMock()
+        mock_plan = {
+            "plan_metadata": {"plan_name": "test_plan", "version": "1.0.0"}
         }
-        
-        response = client.post("/api/v1/plans/execute", json=request)
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert data["execution_id"] == "exec-123"
-    
-    @patch('os.getenv')
-    def test_execute_plan_missing_credentials(self, mock_getenv, client):
-        """Test execution fails with missing credentials"""
-        mock_getenv.return_value = ""
+        mock_registry_instance.get_plan.return_value = mock_plan
+        mock_registry.return_value = mock_registry_instance
         
         request = {
             "plan_id": "plan-123",
@@ -78,6 +59,27 @@ class TestExecutionEndpoints:
         
         response = client.post("/api/v1/plans/execute", json=request)
         
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "execution_record_id" in data
+    
+    @patch('api.main.get_workspace_client')
+    def test_execute_plan_missing_credentials(self, mock_ws_client, client):
+        """Test execution fails with missing credentials"""
+        mock_ws_client.side_effect = ValueError("Databricks credentials not configured")
+        
+        request = {
+            "plan_id": "plan-123",
+            "plan_version": "1.0.0",
+            "sql": "INSERT INTO table SELECT * FROM source",
+            "warehouse_id": "wh-123",
+            "executor_user": "test@databricks.com"
+        }
+        
+        response = client.post("/api/v1/plans/execute", json=request)
+        
+        assert response.status_code == 500
         assert response.status_code == 500
         data = response.json()
         assert "credentials" in data["detail"].lower()
@@ -187,18 +189,49 @@ class TestAgentEndpoints:
 class TestPlanCRUDEndpoints:
     """Test plan CRUD endpoints"""
     
-    @patch('api.main.compiler')
-    def test_save_plan_success(self, mock_compiler, client):
+    @pytest.mark.lakebase
+    def test_save_plan_success(self, client):
         """Test saving a valid plan"""
-        # Mock validation
-        mock_compiler.validate_plan.return_value = (True, [])
+        import uuid
+        from datetime import datetime, timezone
         
+        # Use a proper plan structure that matches the schema
+        plan_id = str(uuid.uuid4())
         request = {
             "plan": {
-                "plan_name": "test_plan",
-                "version": "1.0.0",
-                "owner": "test@databricks.com",
-                "pattern": "incremental_append"
+                "schema_version": "1.0",
+                "plan_metadata": {
+                    "plan_id": plan_id,
+                    "plan_name": "test_api_save",
+                    "version": "1.0.0",
+                    "description": "Test plan for API save",
+                    "owner": "test@databricks.com",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "tags": {"env": "test", "type": "unit_test"}
+                },
+                "pattern": {
+                    "type": "INCREMENTAL_APPEND"
+                },
+                "source": {
+                    "catalog": "test_catalog",
+                    "schema": "raw",
+                    "table": "test_source"
+                },
+                "target": {
+                    "catalog": "test_catalog",
+                    "schema": "curated",
+                    "table": "test_target",
+                    "write_mode": "append"
+                },
+                "pattern_config": {
+                    "watermark_column": "updated_at",
+                    "watermark_type": "timestamp"
+                },
+                "execution_config": {
+                    "warehouse_id": "test_warehouse",
+                    "batch_size": 1000,
+                    "timeout_seconds": 300
+                }
             },
             "user": "test@databricks.com"
         }
@@ -209,7 +242,9 @@ class TestPlanCRUDEndpoints:
         data = response.json()
         assert data["success"] is True
         assert "plan_id" in data
+        assert data["plan_id"] == plan_id
     
+    @pytest.mark.lakebase
     @patch('api.main.compiler')
     def test_save_invalid_plan_fails(self, mock_compiler, client):
         """Test saving an invalid plan fails"""
@@ -251,19 +286,27 @@ class TestPlanCRUDEndpoints:
         assert "plans" in data
         # All returned plans should match filters (when real backend is implemented)
     
+    @pytest.mark.lakebase
     def test_get_plan_by_id(self, client):
         """Test getting a specific plan"""
-        response = client.get("/api/v1/plans/1")
+        # Use a real UUID from the database
+        real_plan_id = "55150a2a-6f82-42a8-b024-ec02f54d65f9"  # e2e_incremental_test
+        response = client.get(f"/api/v1/plans/{real_plan_id}")
         
         assert response.status_code == 200
         data = response.json()
-        assert data["plan_id"] == "1"
-        assert "plan_name" in data
-        assert "pattern_type" in data
+        assert "plan_metadata" in data
+        assert data["plan_metadata"]["plan_id"] == real_plan_id
+        assert "plan_name" in data["plan_metadata"]
+        assert "pattern" in data
+        assert data["pattern"]["type"] in ["INCREMENTAL_APPEND", "SCD2", "FULL_REPLACE", "MERGE_UPSERT"]
     
+    @pytest.mark.lakebase
     def test_get_nonexistent_plan(self, client):
         """Test getting a non-existent plan"""
-        response = client.get("/api/v1/plans/999999")
+        # Use a valid UUID format that doesn't exist
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        response = client.get(f"/api/v1/plans/{fake_uuid}")
         
         assert response.status_code == 404
         data = response.json()

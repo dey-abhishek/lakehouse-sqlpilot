@@ -68,3 +68,4 @@ VALUES
   ('C007', 'Eve Martinez', 'eve.m@email.com', '555-0107', '111 Tech Blvd', 'San Jose', 'CA', 'USA', 'Standard', 'Active', TIMESTAMP '2026-01-03 14:00:00');
 */
 
+

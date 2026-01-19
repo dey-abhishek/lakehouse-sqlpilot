@@ -113,3 +113,4 @@ FROM `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`customer_dim_scd2`;
 DESCRIBE TABLE `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`customer_dim_source`;
 DESCRIBE TABLE `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`customer_dim_scd2`;
 
+

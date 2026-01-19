@@ -222,3 +222,4 @@ if is_ready:
 - Richer exploration context (query performance, data profiles)
 - Bi-directional feedback (SQLPilot execution stats back to Genie)
 
+

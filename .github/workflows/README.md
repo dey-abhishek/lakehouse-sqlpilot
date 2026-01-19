@@ -100,3 +100,4 @@ If you want full CI testing:
 ✅ **Full testing**: Run locally with proper `.env` setup  
 ✅ **Security**: No credentials exposed in GitHub Actions  
 
+

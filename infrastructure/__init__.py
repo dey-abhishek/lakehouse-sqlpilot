@@ -63,7 +63,6 @@ __all__ = [
     "get_lakebase_oauth_manager",
     "get_lakebase_password",
     "stop_lakebase_oauth_manager",
-    
     "LAKEBASE_AVAILABLE",
 ]
 

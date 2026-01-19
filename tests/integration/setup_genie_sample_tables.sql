@@ -226,3 +226,4 @@ FROM `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`sales_summary`;
 -- Sample queries for Genie exploration
 SELECT '✅ Sample tables created successfully!' as status;
 
+

@@ -7,3 +7,4 @@ Tests the complete lifecycle of SQL patterns from plan to execution.
 
 __version__ = "1.0.0"
 
+

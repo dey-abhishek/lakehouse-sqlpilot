@@ -68,3 +68,4 @@ export const validateSecureConnection = (): {
   return { isSecure, warnings }
 }
 
+

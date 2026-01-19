@@ -175,3 +175,9 @@ setup_env.sh
 # Terminals folder (contains command history)
 terminals/
 
+scripts/testing/
+*.bak*
+debug_*.sql
+scripts/testing/
+*.bak*
+debug_*.sql

@@ -21,3 +21,4 @@ pytest-pylint>=0.21.0
 # Assertions
 assertpy>=1.1
 
+

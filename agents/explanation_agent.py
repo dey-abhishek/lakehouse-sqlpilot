@@ -222,3 +222,4 @@ This maintains a complete audit trail of all changes to the data.
         
         return impact_descriptions.get(pattern_type, 'Data will be transformed according to the specified pattern.')
 
+

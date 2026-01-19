@@ -44,3 +44,4 @@ resources:
           - name: SQLPILOT_REQUIRE_AUTH
             value: "true"
 
+

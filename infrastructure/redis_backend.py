@@ -404,3 +404,4 @@ def close_redis():
         _redis_backend.close()
         _redis_backend = None
 
+

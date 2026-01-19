@@ -303,3 +303,4 @@ def stop_lakebase_oauth_manager():
         _lakebase_oauth_manager.stop_auto_refresh()
         _lakebase_oauth_manager = None
 
+

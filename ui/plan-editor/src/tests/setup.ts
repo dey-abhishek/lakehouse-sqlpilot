@@ -29,3 +29,4 @@ global.IntersectionObserver = class IntersectionObserver {
 // Mock fetch
 global.fetch = jest.fn();
 
+

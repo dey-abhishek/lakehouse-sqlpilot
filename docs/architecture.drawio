@@ -178,7 +178,7 @@
         </mxCell>
 
         <!-- Delta Lake -->
-        <mxCell id="delta-lake" value="💾 Delta Lake Tables&#xa;ACID Transactions • Time Travel • Schema Evolution • Z-Ordering" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=2;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="delta-lake" value="💾 Delta Lake Tables&#xa;ACID Transactions • Time Travel • Schema Evolution • Liquid Clustering • Z-Ordering" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=2;fontSize=13;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="100" y="930" width="960" height="50" as="geometry" />
         </mxCell>
 

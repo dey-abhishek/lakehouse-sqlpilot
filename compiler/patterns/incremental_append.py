@@ -21,8 +21,8 @@ class IncrementalAppendPattern(BasePattern):
         
         # Validate write_mode
         write_mode = self.target.get('write_mode', 'append')
-        if write_mode not in ['append', 'merge']:
-            errors.append(f"Incremental append supports write_mode 'append' or 'merge', got '{write_mode}'")
+        if write_mode not in ['append', 'merge', 'overwrite']:
+            errors.append(f"Incremental append supports write_mode 'append', 'merge', or 'overwrite', got '{write_mode}'")
         
         # If merge mode, require match_columns
         if write_mode == 'merge':
@@ -75,10 +75,27 @@ WHEN NOT MATCHED THEN
     INSERT ({insert_columns})
     VALUES ({insert_values});
 """
+        elif write_mode == 'overwrite':
+            # OVERWRITE mode: Replace table with incremental slice
+            sql += f"""
+-- Incremental Append (OVERWRITE mode): Replace table with new records based on watermark
+-- Watermark Column: {watermark_col}
+-- Note: This replaces the entire table with only new records
+
+CREATE OR REPLACE TABLE {self.get_target_fqn()}
+AS
+SELECT {self.get_column_list()}
+FROM {self.get_source_fqn()}
+WHERE `{watermark_col}` > (
+    -- Get max watermark from current table before replacement
+    SELECT COALESCE(MAX(`{watermark_col}`), CAST('1900-01-01' AS TIMESTAMP))
+    FROM {self.get_target_fqn()}
+);
+"""
         else:
             # APPEND mode: Simple INSERT INTO
             sql += f"""
--- Incremental Append: Load new records based on watermark
+-- Incremental Append (APPEND mode): Load new records based on watermark
 -- Watermark Column: {watermark_col}
 
 INSERT INTO {self.get_target_fqn()}

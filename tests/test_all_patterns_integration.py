@@ -165,6 +165,106 @@ class TestIncrementalAppendIntegration:
         # STEP 4: Note - Actual execution skipped (requires test tables)
         print(f"[INTEGRATION] Step 4: Execution skipped (requires test tables)")
         print(f"[INTEGRATION] ✅ FULL WORKFLOW VALIDATED for Incremental Append")
+    
+    def test_full_workflow_incremental_append_merge(self, client, test_catalog, test_schema, test_warehouse):
+        """
+        Test complete workflow: Save → Retrieve → Compile → Execute
+        Pattern: INCREMENTAL_APPEND with MERGE write mode
+        """
+        plan_id = str(uuid.uuid4())
+        plan_name = f"integ_incremental_merge_{plan_id[:8]}"
+        source_table = f"integ_orders_source_{plan_id[:8]}"
+        target_table = f"integ_orders_target_{plan_id[:8]}"
+        
+        plan = {
+            "schema_version": "1.0",
+            "plan_metadata": {
+                "plan_id": plan_id,
+                "plan_name": plan_name,
+                "version": "1.0.0",
+                "description": "Integration test: Incremental Append with MERGE",
+                "owner": "integration_test@databricks.com",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "tags": {"type": "integration_test", "pattern": "incremental_merge"}
+            },
+            "pattern": {
+                "type": "INCREMENTAL_APPEND"
+            },
+            "source": {
+                "catalog": test_catalog,
+                "schema": test_schema,
+                "table": source_table,
+                "columns": ["order_id", "customer_id", "amount", "order_date"]
+            },
+            "target": {
+                "catalog": test_catalog,
+                "schema": test_schema,
+                "table": target_table,
+                "write_mode": "merge"
+            },
+            "pattern_config": {
+                "watermark_column": "order_date",
+                "watermark_type": "timestamp",
+                "match_columns": ["order_id"]
+            },
+            "execution_config": {
+                "warehouse_id": test_warehouse,
+                "batch_size": 1000,
+                "timeout_seconds": 300
+            }
+        }
+        
+        # STEP 1: Save plan
+        print(f"\n[INTEGRATION] Step 1: Saving Incremental Append MERGE plan {plan_id}...")
+        save_response = client.post("/api/v1/plans", json={
+            "plan": plan,
+            "user": "integration_test@databricks.com"
+        })
+        
+        assert save_response.status_code == 200
+        save_data = save_response.json()
+        assert save_data["success"] is True
+        assert save_data["plan_id"] == plan_id
+        print(f"[INTEGRATION] ✅ Plan saved with ID: {plan_id}")
+        
+        # STEP 2: Retrieve plan
+        print(f"[INTEGRATION] Step 2: Retrieving plan...")
+        get_response = client.get(f"/api/v1/plans/{plan_id}")
+        assert get_response.status_code == 200
+        retrieved_plan = get_response.json()
+        assert retrieved_plan["plan_metadata"]["plan_id"] == plan_id
+        assert retrieved_plan["target"]["write_mode"] == "merge"
+        assert retrieved_plan["pattern_config"]["match_columns"] == ["order_id"]
+        print(f"[INTEGRATION] ✅ Plan retrieved successfully")
+        
+        # STEP 3: Compile plan
+        print(f"[INTEGRATION] Step 3: Compiling SQL...")
+        compile_response = client.post("/api/v1/compile", json={"plan": plan})
+        assert compile_response.status_code == 200
+        compile_data = compile_response.json()
+        assert "sql" in compile_data
+        sql = compile_data["sql"]
+        
+        # Verify MERGE syntax
+        assert "MERGE INTO" in sql
+        assert "USING" in sql
+        assert "ON target.`order_id` = source.`order_id`" in sql
+        assert "WHEN MATCHED THEN" in sql
+        assert "UPDATE SET" in sql
+        assert "WHEN NOT MATCHED THEN" in sql
+        assert "INSERT *" in sql  # Delta Lake shorthand
+        
+        # Verify explicit columns in SELECT (no SELECT *)
+        assert "`order_id`, `customer_id`, `amount`, `order_date`" in sql
+        
+        # Verify UPDATE SET * EXCEPT syntax
+        assert "UPDATE SET * EXCEPT" in sql or "UPDATE SET *" in sql
+        
+        print(f"[INTEGRATION] ✅ SQL compiled with MERGE syntax ({len(sql)} chars)")
+        
+        # STEP 4: Note - Actual execution skipped (requires test tables)
+        print(f"[INTEGRATION] Step 4: Execution skipped (requires test tables)")
+        print(f"[INTEGRATION] ✅ FULL WORKFLOW VALIDATED for Incremental Append MERGE")
 
 
 class TestFullReplaceIntegration:

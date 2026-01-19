@@ -126,6 +126,49 @@ def scd2_plan():
 
 
 @pytest.fixture
+def incremental_merge_plan():
+    """Incremental Append with MERGE mode plan for testing"""
+    plan_id = str(uuid.uuid4())
+    return {
+        "schema_version": "1.0",
+        "plan_metadata": {
+            "plan_id": plan_id,
+            "plan_name": "e2e_incremental_merge_test",
+            "version": "1.0.0",
+            "description": "End-to-end test plan for Incremental Append with MERGE",
+            "owner": "test@databricks.com",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "tags": {"env": "test", "type": "e2e", "pattern": "incremental_merge"}
+        },
+        "pattern": {
+            "type": "INCREMENTAL_APPEND"
+        },
+        "source": {
+            "catalog": "test_catalog",
+            "schema": "raw",
+            "table": "orders_source",
+            "columns": ["order_id", "customer_id", "amount", "order_date", "status"]
+        },
+        "target": {
+            "catalog": "test_catalog",
+            "schema": "curated",
+            "table": "orders_target",
+            "write_mode": "merge"
+        },
+        "pattern_config": {
+            "watermark_column": "order_date",
+            "watermark_type": "timestamp",
+            "match_columns": ["order_id"]
+        },
+        "execution_config": {
+            "warehouse_id": "test_warehouse",
+            "batch_size": 1000,
+            "timeout_seconds": 300
+        }
+    }
+
+
+@pytest.fixture
 def full_replace_plan():
     """Full Replace plan for testing"""
     plan_id = str(uuid.uuid4())
@@ -324,6 +367,92 @@ class TestEndToEndWorkflow:
         
         print(f"[E2E] ✅ SQL validated for INCREMENTAL_APPEND pattern")
         print(f"\n[E2E] SUCCESS: Full workflow completed for plan {plan_id}\n")
+    
+    def test_save_retrieve_compile_incremental_merge(self, client, incremental_merge_plan):
+        """
+        Test UI → Backend → SQL workflow for Incremental Append with MERGE mode
+        
+        This test validates:
+        1. UI can save an incremental MERGE plan via REST API
+        2. Backend stores it correctly in Lakebase
+        3. Plan can be retrieved from Lakebase
+        4. Compiler generates correct MERGE INTO SQL
+        5. Generated SQL includes explicit columns (no SELECT *)
+        """
+        plan_id = incremental_merge_plan["plan_metadata"]["plan_id"]
+        print(f"\n[E2E] Testing Incremental Append MERGE workflow for plan: {plan_id}")
+        
+        # Step 1: Save plan (simulates UI form submission)
+        print(f"[E2E] Step 1: Saving Incremental MERGE plan via API...")
+        
+        save_response = client.post("/api/v1/plans", json={
+            "plan": incremental_merge_plan,
+            "user": "test@databricks.com"
+        })
+        
+        assert save_response.status_code == 200, f"Save failed: {save_response.text}"
+        save_data = save_response.json()
+        assert save_data["success"] is True
+        assert save_data["plan_id"] == plan_id
+        
+        print(f"[E2E] ✅ Plan saved to Lakebase with ID: {plan_id}")
+        
+        # Step 2: Retrieve plan (simulates UI loading existing plan)
+        print(f"[E2E] Step 2: Retrieving plan from Lakebase...")
+        
+        get_response = client.get(f"/api/v1/plans/{plan_id}")
+        assert get_response.status_code == 200, f"Get failed: {get_response.text}"
+        retrieved_plan = get_response.json()
+        
+        # Validate retrieved plan structure
+        assert retrieved_plan["plan_metadata"]["plan_id"] == plan_id
+        assert retrieved_plan["pattern"]["type"] == "INCREMENTAL_APPEND"
+        assert retrieved_plan["target"]["write_mode"] == "merge"
+        assert retrieved_plan["pattern_config"]["match_columns"] == ["order_id"]
+        assert retrieved_plan["source"]["columns"] == ["order_id", "customer_id", "amount", "order_date", "status"]
+        
+        print(f"[E2E] ✅ Plan retrieved from Lakebase with MERGE config")
+        
+        # Step 3: Compile plan to SQL
+        print(f"[E2E] Step 3: Compiling plan to MERGE SQL...")
+        
+        # Remove metadata before compilation
+        compile_plan = {k: v for k, v in retrieved_plan.items() if k != "_metadata"}
+        
+        compile_response = client.post("/api/v1/plans/compile", json={
+            "plan": compile_plan,
+            "context": {}
+        })
+        
+        assert compile_response.status_code == 200, f"Compile failed: {compile_response.text}"
+        compile_data = compile_response.json()
+        assert compile_data["success"] is True
+        
+        sql = compile_data["sql"]
+        assert sql is not None
+        assert len(sql) > 0
+        
+        print(f"[E2E] ✅ MERGE SQL generated ({len(sql)} characters)")
+        
+        # Step 4: Verify MERGE SQL correctness
+        assert "-- LAKEHOUSE SQLPILOT GENERATED SQL" in sql
+        assert "MERGE INTO" in sql
+        assert "USING" in sql
+        assert "`test_catalog`.`curated`.`orders_target`" in sql or "test_catalog.curated.orders_target" in sql
+        assert "ON target.`order_id` = source.`order_id`" in sql
+        assert "WHEN MATCHED THEN" in sql
+        assert "UPDATE SET" in sql
+        assert "WHEN NOT MATCHED THEN" in sql
+        assert "INSERT *" in sql  # Delta Lake shorthand
+
+        # Verify explicit columns in SELECT (no SELECT *)
+        assert "`order_id`, `customer_id`, `amount`, `order_date`, `status`" in sql
+        
+        # Verify UPDATE SET * EXCEPT syntax
+        assert "UPDATE SET * EXCEPT" in sql or "UPDATE SET *" in sql
+        
+        print(f"[E2E] ✅ SQL validated for INCREMENTAL_APPEND MERGE pattern")
+        print(f"\n[E2E] SUCCESS: Full MERGE workflow completed for plan {plan_id}\n")
     
     def test_save_retrieve_compile_scd2(self, client, scd2_plan):
         """

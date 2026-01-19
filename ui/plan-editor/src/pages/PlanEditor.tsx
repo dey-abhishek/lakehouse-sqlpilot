@@ -243,6 +243,42 @@ function PlanEditor() {
     }
   }
 
+  const autoFillSourceColumns = async () => {
+    if (!plan.source_catalog || !plan.source_schema || !plan.source_table) {
+      setSnackbar({ 
+        open: true, 
+        message: 'Please select source catalog, schema, and table first', 
+        severity: 'error' 
+      })
+      return
+    }
+
+    setLoadingSourceTables(true) // Reuse loading state
+    try {
+      const response = await api.getTableColumns(
+        plan.source_catalog,
+        plan.source_schema,
+        plan.source_table
+      )
+      const columnNames = response.columns.map((col: any) => col.name).join(', ')
+      setPlan({ ...plan, source_columns: columnNames })
+      setSnackbar({ 
+        open: true, 
+        message: `Auto-filled ${response.columns.length} columns`, 
+        severity: 'success' 
+      })
+    } catch (error) {
+      console.error('Failed to fetch columns:', error)
+      setSnackbar({ 
+        open: true, 
+        message: 'Failed to fetch columns from source table', 
+        severity: 'error' 
+      })
+    } finally {
+      setLoadingSourceTables(false)
+    }
+  }
+
   const loadWarehouses = async () => {
     setLoadingWarehouses(true)
     try {
@@ -310,6 +346,14 @@ function PlanEditor() {
         // Add match_columns if provided (for merge mode)
         if (plan.match_columns) {
           patternConfig.match_columns = plan.match_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        } else if (plan.write_mode === 'merge') {
+          setSnackbar({ 
+            open: true, 
+            message: 'Incremental Append with MERGE mode requires Match Columns', 
+            severity: 'error' 
+          })
+          setSaving(false)
+          return
         }
         break
           
@@ -465,6 +509,13 @@ function PlanEditor() {
         // Add match_columns if provided (for merge mode)
         if (plan.match_columns) {
           patternConfig.match_columns = plan.match_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        } else if (plan.write_mode === 'merge') {
+          setSnackbar({ 
+            open: true, 
+            message: 'Incremental Append with MERGE mode requires Match Columns', 
+            severity: 'error' 
+          })
+          return
         }
         break
         
@@ -855,6 +906,25 @@ function PlanEditor() {
               ))}
             </TextField>
           </Grid>
+          
+          {/* Source Columns - Required for certain patterns (NOT for Incremental Append MERGE) */}
+          {(plan.pattern_type === 'MERGE_UPSERT' || 
+            plan.pattern_type === 'SCD2' || 
+            plan.pattern_type === 'SNAPSHOT') && (
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                label="Source Columns *"
+                value={plan.source_columns}
+                onChange={handleChange('source_columns')}
+                helperText="Comma-separated column names from source table"
+                placeholder="customer_id, name, email"
+                required
+                multiline
+                maxRows={4}
+              />
+            </Grid>
+          )}
 
           {/* Pattern-Specific Configuration */}
           <Grid item xs={12}>

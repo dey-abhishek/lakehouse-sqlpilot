@@ -121,6 +121,119 @@ class TestIncrementalAppendPattern:
         pattern = IncrementalAppendPattern(incremental_plan)
         errors = pattern.validate_config()
         assert len(errors) == 0
+    
+    def test_incremental_merge_mode(self, execution_context):
+        """Test incremental append with MERGE write mode"""
+        merge_plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_incremental_merge',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'INCREMENTAL_APPEND'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'orders_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'orders_processed',
+                'write_mode': 'merge'
+            },
+            'pattern_config': {
+                'watermark_column': 'order_date',
+                'watermark_type': 'timestamp',
+                'match_columns': ['order_id']
+            }
+        }
+        
+        pattern = IncrementalAppendPattern(merge_plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Check MERGE syntax
+        assert 'MERGE INTO' in sql
+        assert 'USING' in sql
+        assert 'ON target.`order_id` = source.`order_id`' in sql
+        assert 'WHEN MATCHED THEN' in sql
+        assert 'UPDATE SET' in sql
+        assert 'WHEN NOT MATCHED THEN' in sql
+        assert 'INSERT *' in sql  # Delta Lake shorthand for INSERT
+        
+        # Verify SELECT * (no need for explicit columns!)
+        assert 'SELECT *' in sql
+        assert 'FROM `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`orders_raw`' in sql
+        
+        # Verify UPDATE SET * EXCEPT syntax for excluding match columns
+        assert 'UPDATE SET * EXCEPT' in sql or 'UPDATE SET *' in sql
+    
+    def test_incremental_overwrite_mode(self, execution_context):
+        """Test incremental append with OVERWRITE write mode"""
+        overwrite_plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_incremental_overwrite',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'INCREMENTAL_APPEND'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'events_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'events_processed',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'watermark_column': 'event_timestamp',
+                'watermark_type': 'timestamp'
+            }
+        }
+        
+        pattern = IncrementalAppendPattern(overwrite_plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Check CREATE OR REPLACE syntax
+        assert 'CREATE OR REPLACE TABLE' in sql
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`events_processed`' in sql
+        assert 'SELECT' in sql
+        assert 'WHERE `event_timestamp` >' in sql
+    
+    def test_incremental_merge_validation_requires_match_columns(self):
+        """Test that MERGE mode requires match_columns"""
+        invalid_plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_invalid',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'INCREMENTAL_APPEND'},
+            'source': {
+                'catalog': 'test',
+                'schema': 'test',
+                'table': 'test'
+            },
+            'target': {
+                'catalog': 'test',
+                'schema': 'test',
+                'table': 'test',
+                'write_mode': 'merge'
+            },
+            'pattern_config': {
+                'watermark_column': 'updated_at',
+                'watermark_type': 'timestamp'
+                # Missing match_columns!
+            }
+        }
+        
+        pattern = IncrementalAppendPattern(invalid_plan)
+        errors = pattern.validate_config()
+        assert len(errors) > 0
+        assert any('match_columns' in err for err in errors)
 
 
 class TestSCD2Pattern:

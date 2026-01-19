@@ -46,22 +46,23 @@ class IncrementalAppendPattern(BasePattern):
             match_conditions = [f"target.`{col}` = source.`{col}`" for col in match_columns]
             match_condition = " AND ".join(match_conditions)
             
-            # Build update set clause
-            all_columns = self.get_column_list().split(', ')
-            update_set = ", ".join([f"target.`{col.strip('`')}` = source.`{col.strip('`')}`" for col in all_columns if col.strip('`') not in match_columns])
-            
-            # Build insert columns
-            insert_columns = ", ".join([f"`{col.strip('`')}`" for col in all_columns])
-            insert_values = ", ".join([f"source.`{col.strip('`')}`" for col in all_columns])
+            # Build update set clause using Delta Lake shorthand
+            # UPDATE SET * updates all columns except the match keys
+            if len(match_columns) > 0:
+                exclude_clause = ", ".join([f"`{col}`" for col in match_columns])
+                update_clause = f"UPDATE SET * EXCEPT ({exclude_clause})"
+            else:
+                update_clause = "UPDATE SET *"
             
             sql += f"""
 -- Incremental Append (MERGE mode): Upsert new records based on watermark
 -- Watermark Column: {watermark_col}
 -- Match Columns: {', '.join(match_columns)}
+-- Strategy: MERGE with UPDATE * and INSERT * (all columns handled automatically)
 
 MERGE INTO {self.get_target_fqn()} AS target
 USING (
-    SELECT {self.get_column_list()}
+    SELECT *
     FROM {self.get_source_fqn()}
     WHERE `{watermark_col}` > (
         SELECT COALESCE(MAX(`{watermark_col}`), CAST('1900-01-01' AS TIMESTAMP))
@@ -70,10 +71,9 @@ USING (
 ) AS source
 ON {match_condition}
 WHEN MATCHED THEN
-    UPDATE SET {update_set}
+    {update_clause}
 WHEN NOT MATCHED THEN
-    INSERT ({insert_columns})
-    VALUES ({insert_values});
+    INSERT *;
 """
         elif write_mode == 'overwrite':
             # OVERWRITE mode: Replace table with incremental slice

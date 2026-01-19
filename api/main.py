@@ -298,6 +298,25 @@ async def list_tables(catalog: str, schema: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}/columns")
+async def get_table_columns(catalog: str, schema: str, table: str):
+    """Get columns from a table"""
+    try:
+        table_info = workspace_client.tables.get(
+            full_name=f"{catalog}.{schema}.{table}"
+        )
+        return {
+            "columns": [
+                {
+                    "name": col.name,
+                    "type": col.type_text or str(col.type_name) if col.type_name else "unknown"
+                }
+                for col in table_info.columns or []
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch columns: {str(e)}")
+
 @app.get("/api/v1/warehouses")
 async def list_warehouses():
     """List available SQL warehouses"""

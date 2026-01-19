@@ -284,6 +284,10 @@ class APIService {
     return this.request<{ tables: Table[] }>(`/catalogs/${catalog}/schemas/${schema}/tables`)
   }
 
+  async getTableColumns(catalog: string, schema: string, table: string): Promise<{ columns: Array<{ name: string; type: string }> }> {
+    return this.request<{ columns: Array<{ name: string; type: string }> }>(`/catalogs/${catalog}/schemas/${schema}/tables/${table}/columns`)
+  }
+
   // Warehouses
   async listWarehouses(): Promise<{ warehouses: Warehouse[] }> {
     return this.request<{ warehouses: Warehouse[] }>('/warehouses')

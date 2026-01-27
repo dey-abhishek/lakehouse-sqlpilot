@@ -15,8 +15,15 @@ import {
   Alert,
   TextField,
   MenuItem,
+  Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import { api } from '../services/api'
 
 interface Execution {
@@ -41,6 +48,8 @@ function ExecutionDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [userFilter, setUserFilter] = useState<string>('')
+  const [errorDialogOpen, setErrorDialogOpen] = useState(false)
+  const [selectedError, setSelectedError] = useState<string | null>(null)
 
   const fetchExecutions = async () => {
     try {
@@ -96,6 +105,16 @@ function ExecutionDashboard() {
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
     return `${minutes}m ${remainingSeconds}s`
+  }
+
+  const handleErrorClick = (errorMessage: string) => {
+    setSelectedError(errorMessage)
+    setErrorDialogOpen(true)
+  }
+
+  const handleCloseErrorDialog = () => {
+    setErrorDialogOpen(false)
+    setSelectedError(null)
   }
 
   return (
@@ -213,25 +232,52 @@ function ExecutionDashboard() {
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" noWrap sx={{ maxWidth: 150 }}>
-                      {exec.executor_user}
-                    </Typography>
+                    <Tooltip title={exec.executor_user} arrow placement="top">
+                      <Typography 
+                        variant="body2" 
+                        noWrap 
+                        sx={{ 
+                          maxWidth: 200,
+                          cursor: 'help'
+                        }}
+                      >
+                        {exec.executor_user}
+                      </Typography>
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
-                    {exec.error_message && (
-                      <Typography 
-                        variant="caption" 
-                        color="error"
-                        sx={{ 
-                          maxWidth: 200, 
-                          overflow: 'hidden', 
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          display: 'block'
-                        }}
-                        title={exec.error_message}
-                      >
-                        {exec.error_message}
+                    {exec.error_message ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Tooltip title="Click to view full error" arrow>
+                          <IconButton 
+                            size="small" 
+                            color="error"
+                            onClick={() => handleErrorClick(exec.error_message!)}
+                          >
+                            <ErrorOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Typography 
+                          variant="caption" 
+                          color="error"
+                          sx={{ 
+                            maxWidth: 250, 
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            cursor: 'pointer',
+                            '&:hover': {
+                              textDecoration: 'underline'
+                            }
+                          }}
+                          onClick={() => handleErrorClick(exec.error_message!)}
+                        >
+                          {exec.error_message}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">
+                        —
                       </Typography>
                     )}
                   </TableCell>
@@ -251,6 +297,42 @@ function ExecutionDashboard() {
           </Box>
         </TableContainer>
       )}
+
+      {/* Error Dialog */}
+      <Dialog 
+        open={errorDialogOpen} 
+        onClose={handleCloseErrorDialog}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ErrorOutlineIcon color="error" />
+            <Typography variant="h6">Execution Error Details</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Paper 
+            variant="outlined" 
+            sx={{ 
+              p: 2, 
+              backgroundColor: '#fff5f5',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: '400px',
+              overflow: 'auto'
+            }}
+          >
+            <Typography variant="body2" component="pre" sx={{ margin: 0 }}>
+              {selectedError}
+            </Typography>
+          </Paper>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseErrorDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

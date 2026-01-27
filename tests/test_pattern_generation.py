@@ -202,6 +202,11 @@ class TestIncrementalAppendPattern:
         assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`events_processed`' in sql
         assert 'SELECT' in sql
         assert 'WHERE `event_timestamp` >' in sql
+        
+        # Check for warning comments
+        assert 'WARNING: OVERWRITE MODE - DATA LOSS RISK' in sql
+        assert 'REPLACES the entire table with ONLY NEW RECORDS' in sql
+        assert 'ALL HISTORICAL DATA IS DELETED' in sql
     
     def test_incremental_merge_validation_requires_match_columns(self):
         """Test that MERGE mode requires match_columns"""
@@ -453,6 +458,388 @@ class TestPatternFactory:
         assert 'SNAPSHOT' in patterns
 
 
+class TestFullReplacePatternEnhancements:
+    """Tests for enhanced Full Replace pattern"""
+    
+    def test_full_replace_basic(self, execution_context):
+        """Test basic full replace"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_basic',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'customers_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'customers_clean',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {}
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'CREATE OR REPLACE TABLE' in sql
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`customers_clean`' in sql
+        assert 'FROM `lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`customers_raw`' in sql
+    
+    def test_full_replace_with_liquid_clustering(self, execution_context):
+        """Test full replace with liquid clustering"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_clustering',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'orders_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'orders_clean',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'direct',
+                'table_format': 'delta',
+                'cluster_columns': ['customer_id', 'order_date']
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'CREATE OR REPLACE TABLE' in sql
+        assert 'CLUSTER BY (`customer_id`, `order_date`)' in sql
+        assert 'USING DELTA' in sql
+        assert 'Liquid Clustering enabled' in sql
+    
+    def test_full_replace_with_table_properties(self, execution_context):
+        """Test full replace with table properties"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_props',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'events_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'events_optimized',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'direct',
+                'table_format': 'delta',
+                'table_properties': {
+                    'delta.autoOptimize.optimizeWrite': 'true',
+                    'delta.enableDeletionVectors': 'true',
+                    'delta.targetFileSize': '128mb'
+                }
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'TBLPROPERTIES' in sql
+        assert 'delta.autoOptimize.optimizeWrite' in sql
+        assert 'delta.enableDeletionVectors' in sql
+        assert 'delta.targetFileSize' in sql
+    
+    def test_full_replace_staging_mode(self, execution_context):
+        """Test full replace with staging table approach"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_staging',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'sales_raw'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'sales_production',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'staging',
+                'table_format': 'delta'
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'Staging Table Approach' in sql
+        assert 'sales_production_staging' in sql
+        assert 'ALTER TABLE' in sql
+        assert 'RENAME TO' in sql
+        assert 'STEP 1' in sql
+        assert 'STEP 2' in sql
+        assert 'STEP 3' in sql
+    
+    def test_full_replace_with_filter(self, execution_context):
+        """Test full replace with data filtering"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_filter',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'transactions_all'
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'transactions_active',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'direct',
+                'filter_condition': "status = 'active' AND created_date >= '2023-01-01'"
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'WHERE' in sql
+        assert "status = 'active'" in sql
+        assert "created_date >= '2023-01-01'" in sql
+    
+    def test_full_replace_inplace(self, execution_context):
+        """Test full replace in-place (source = target)"""
+        plan = {
+            'plan_metadata': {
+                'plan_id': str(uuid.uuid4()),
+                'plan_name': 'test_full_replace_inplace',
+                'version': '1.0.0'
+            },
+            'pattern': {'type': 'FULL_REPLACE'},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'my_table'  # Same as target
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'my_table',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'direct',
+                'refresh_inplace': True,
+                'cluster_columns': ['id']
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        assert 'IN-PLACE REFRESH' in sql
+        assert 'Source and target are the same table' in sql
+    
+    def test_full_replace_validation_invalid_mode(self):
+        """Test validation rejects invalid refresh_mode"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'pattern_config': {
+                'refresh_mode': 'invalid_mode'
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        errors = pattern.validate_config()
+        
+        assert len(errors) > 0
+        assert any('refresh_mode' in e for e in errors)
+    
+    def test_full_replace_validation_both_cluster_and_partition(self):
+        """Test validation rejects both clustering and partitioning"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'pattern_config': {
+                'cluster_columns': ['col1'],
+                'partition_columns': ['col2']
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        errors = pattern.validate_config()
+        
+        assert len(errors) > 0
+        assert any('cluster_columns' in e and 'partition_columns' in e for e in errors)
+    
+    def test_full_replace_staging_mode_comparison_table(self, execution_context):
+        """Test that staging mode compares with the correct original table"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'source': {
+                'catalog': 'source_cat',
+                'schema': 'source_schema',
+                'table': 'source_table'
+            },
+            'target': {
+                'catalog': 'target_cat',
+                'schema': 'target_schema',
+                'table': 'target_table',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'staging',
+                'refresh_inplace': False
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Should compare staging table with target_table (the original production table)
+        assert '`target_cat`.`target_schema`.`target_table`' in sql
+        assert 'STEP 2: Validate staging table' in sql
+    
+    def test_full_replace_staging_inplace_comparison(self, execution_context):
+        """Test that staging mode with in-place refresh compares correctly"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'my_table'  # Same as target
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'my_table',
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'staging',
+                'refresh_inplace': True,
+                'table_format': 'delta'
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Should have in-place warning
+        assert 'IN-PLACE REFRESH' in sql
+        # Should compare staging with the same table (target)
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`my_table`' in sql
+        # Should warn about format matching
+        assert "Ensure the existing table format matches 'DELTA'" in sql
+    
+    def test_full_replace_format_conversion_direct(self, execution_context):
+        """Test format conversion (Delta to Iceberg) using direct mode"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'cust_dim_snapshot'  # Delta table
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'cust_dim_snapshot_iceberg',  # New Iceberg table
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'direct',
+                'refresh_inplace': True,  # User checked "in-place" but with different table names (format conversion)
+                'table_format': 'iceberg',
+                'cluster_columns': 'cur_dt'
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Should use DROP TABLE IF EXISTS + CREATE TABLE (not CREATE OR REPLACE)
+        assert 'DROP TABLE IF EXISTS' in sql
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`cust_dim_snapshot_iceberg`' in sql
+        assert 'CREATE TABLE' in sql
+        assert 'USING ICEBERG' in sql
+        assert 'CLUSTER BY' in sql
+        # Should have format conversion comment
+        assert 'FORMAT CONVERSION' in sql
+        # Should reference source table
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`cust_dim_snapshot`' in sql
+        # Should NOT have CREATE OR REPLACE (which causes the error)
+        assert 'CREATE OR REPLACE TABLE' not in sql
+    
+    def test_full_replace_format_conversion_staging(self, execution_context):
+        """Test format conversion using staging mode"""
+        plan = {
+            'pattern': {'type': 'FULL_REPLACE'},
+            'plan_metadata': {},
+            'source': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'cust_dim_snapshot'  # Delta table
+            },
+            'target': {
+                'catalog': 'lakehouse-sqlpilot',
+                'schema': 'lakehouse-sqlpilot-schema',
+                'table': 'cust_dim_snapshot_iceberg',  # New Iceberg table
+                'write_mode': 'overwrite'
+            },
+            'pattern_config': {
+                'refresh_mode': 'staging',
+                'refresh_inplace': True,  # Format conversion scenario
+                'table_format': 'iceberg'
+            }
+        }
+        
+        pattern = FullReplacePattern(plan)
+        sql = pattern.generate_sql(execution_context)
+        
+        # Should have format conversion warning
+        assert 'FORMAT CONVERSION DETECTED' in sql
+        # Should create staging table
+        assert '`lakehouse-sqlpilot`.`lakehouse-sqlpilot-schema`.`cust_dim_snapshot_iceberg_staging`' in sql
+        # Should have special swap instructions for format conversion
+        assert 'DROP TABLE IF EXISTS' in sql
+        # Should NOT have the old backup/rename logic
+        assert 'RENAME TO' in sql
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
 

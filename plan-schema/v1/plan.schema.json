@@ -207,6 +207,44 @@
           "type": "array",
           "items": {"type": "string"},
           "description": "Columns to partition by (SNAPSHOT pattern)"
+        },
+        "refresh_mode": {
+          "type": "string",
+          "enum": ["direct", "staging"],
+          "description": "Refresh mode for FULL_REPLACE pattern (direct or staging)"
+        },
+        "refresh_inplace": {
+          "type": "boolean",
+          "description": "Whether to refresh table in-place (source = target) for FULL_REPLACE"
+        },
+        "table_format": {
+          "type": "string",
+          "enum": ["delta", "iceberg"],
+          "description": "Table format for FULL_REPLACE pattern (delta or iceberg)"
+        },
+        "iceberg_version": {
+          "type": "string",
+          "enum": ["2", "3"],
+          "description": "Iceberg version for FULL_REPLACE pattern (v2 or v3)"
+        },
+        "enable_uniform": {
+          "type": "boolean",
+          "description": "Enable Delta UniForm for FULL_REPLACE pattern (adds Iceberg compatibility to Delta tables)"
+        },
+        "cluster_columns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Columns for liquid clustering (FULL_REPLACE pattern)"
+        },
+        "filter_condition": {
+          "type": "string",
+          "maxLength": 5000,
+          "description": "WHERE clause filter for FULL_REPLACE pattern"
+        },
+        "table_properties": {
+          "type": "object",
+          "additionalProperties": {"type": "string"},
+          "description": "Delta/Iceberg table properties for FULL_REPLACE pattern"
         }
       },
       "additionalProperties": false

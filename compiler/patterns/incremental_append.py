@@ -78,9 +78,25 @@ WHEN NOT MATCHED THEN
         elif write_mode == 'overwrite':
             # OVERWRITE mode: Replace table with incremental slice
             sql += f"""
--- Incremental Append (OVERWRITE mode): Replace table with new records based on watermark
+-- ⚠️  WARNING: OVERWRITE MODE - DATA LOSS RISK ⚠️
+-- Incremental Append (OVERWRITE mode): Replace table with ONLY the latest batch
 -- Watermark Column: {watermark_col}
--- Note: This replaces the entire table with only new records
+-- 
+-- IMPORTANT: This mode REPLACES the entire table with ONLY NEW RECORDS.
+-- ALL HISTORICAL DATA IS DELETED on each run!
+-- 
+-- Example behavior:
+--   Run 1: Load 100 records (Jan 1-10)  → Table has 100 rows
+--   Run 2: Load 20 records (Jan 11-15)  → Table has 20 rows (lost 100!)
+--   Run 3: Load 10 records (Jan 16-20)  → Table has 10 rows (lost 20!)
+-- 
+-- Use cases:
+--   - Staging tables (process batch, then archive)
+--   - Temporary processing (only need current batch)
+--   - Real-time dashboards (only show "what changed today")
+-- 
+-- To keep ALL history: Use write_mode='append' instead
+-- To replace with FULL source: Use the 'Full Replace' pattern instead
 
 CREATE OR REPLACE TABLE {self.get_target_fqn()}
 AS

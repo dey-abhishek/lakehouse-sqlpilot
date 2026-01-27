@@ -12,6 +12,8 @@ import {
   Autocomplete,
   CircularProgress,
   Snackbar,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material'
 import SaveIcon from '@mui/icons-material/Save'
 import PreviewIcon from '@mui/icons-material/Preview'
@@ -62,7 +64,19 @@ function PlanEditor() {
     current_flag_column: 'is_current',
     snapshot_date_column: '',
     partition_columns: '',
+    // Full Replace specific fields
+    refresh_mode: 'direct',
+    refresh_inplace: false,
+    cluster_columns: '',
+    table_format: 'delta',
+    iceberg_version: '2',  // Default to v2
+    enable_uniform: false,  // Default to standard Delta (no UniForm)
+    filter_condition: '',
+    table_properties: '',
   })
+
+  // Track the original plan name to detect changes
+  const [originalPlanName, setOriginalPlanName] = useState<string>('')
 
   // Unity Catalog data
   const [catalogs, setCatalogs] = useState<Catalog[]>([])
@@ -134,7 +148,19 @@ function PlanEditor() {
         current_flag_column: existingPlan.pattern_config?.current_flag_column || 'is_current',
         snapshot_date_column: existingPlan.pattern_config?.snapshot_date_column || '',
         partition_columns: existingPlan.pattern_config?.partition_columns?.join(',') || '',
+        // Full Replace fields
+        refresh_mode: existingPlan.pattern_config?.refresh_mode || 'direct',
+        refresh_inplace: existingPlan.pattern_config?.refresh_inplace || false,
+        cluster_columns: existingPlan.pattern_config?.cluster_columns?.join(',') || '',
+        table_format: existingPlan.pattern_config?.table_format || 'delta',
+        iceberg_version: existingPlan.pattern_config?.iceberg_version || '2',  // Default to v2
+        enable_uniform: existingPlan.pattern_config?.enable_uniform || false,  // Default to false (standard Delta)
+        filter_condition: existingPlan.pattern_config?.filter_condition || '',
+        table_properties: existingPlan.pattern_config?.table_properties ? JSON.stringify(existingPlan.pattern_config.table_properties, null, 2) : '',
       })
+      
+      // Store the original plan name to detect changes
+      setOriginalPlanName(existingPlan.plan_metadata?.plan_name || existingPlan.plan_name || '')
       
       console.log('[PlanEditor] Set plan state with pattern_type:', existingPlan.pattern?.type)
       
@@ -293,10 +319,15 @@ function PlanEditor() {
   }
 
   const handleChange = (field: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    let value = event.target.value
+    let value: string | boolean = event.target.value
+    
+    // Handle checkbox inputs
+    if (event.target.type === 'checkbox') {
+      value = event.target.checked
+    }
     
     // Sanitize plan_name: convert to lowercase and remove invalid characters
-    if (field === 'plan_name') {
+    if (field === 'plan_name' && typeof value === 'string') {
       value = value
         .toLowerCase()                    // Convert to lowercase
         .replace(/[^a-z0-9_]/g, '_')     // Replace invalid chars with underscore
@@ -389,11 +420,6 @@ function PlanEditor() {
           }
           break
           
-        case 'FULL_REPLACE':
-          // No config needed
-          patternConfig = {}
-          break
-          
         case 'SNAPSHOT':
           patternConfig = {
             snapshot_date_column: plan.snapshot_date_column || (plan.config as any)?.snapshot_date_column,
@@ -401,6 +427,46 @@ function PlanEditor() {
           // Add partition columns if specified
           if (plan.partition_columns) {
             patternConfig.partition_columns = plan.partition_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
+          // Add source columns if specified
+          if (plan.source_columns) {
+            sourceConfig.columns = plan.source_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
+          break
+          
+        case 'FULL_REPLACE':
+          patternConfig = {
+            refresh_mode: plan.refresh_mode || 'direct',
+            refresh_inplace: plan.refresh_inplace || false,
+            table_format: plan.table_format || 'delta',
+            iceberg_version: plan.iceberg_version || '2',  // Always include version (for both Delta and Iceberg)
+            enable_uniform: plan.enable_uniform || false,  // Include UniForm flag for Delta tables
+          }
+          // Add cluster columns if specified
+          if (plan.cluster_columns) {
+            patternConfig.cluster_columns = plan.cluster_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
+          // Add partition columns if specified
+          if (plan.partition_columns) {
+            patternConfig.partition_columns = plan.partition_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+          }
+          // Add filter condition if specified
+          if (plan.filter_condition) {
+            patternConfig.filter_condition = plan.filter_condition.trim()
+          }
+          // Add table properties if specified
+          if (plan.table_properties) {
+            try {
+              patternConfig.table_properties = JSON.parse(plan.table_properties)
+            } catch (e) {
+              setSnackbar({ 
+                open: true, 
+                message: 'Invalid JSON in Table Properties', 
+                severity: 'error' 
+              })
+              setSaving(false)
+              return
+            }
           }
           // Add source columns if specified
           if (plan.source_columns) {
@@ -424,11 +490,12 @@ function PlanEditor() {
       const transformedPlan = {
         schema_version: '1.0',
         plan_metadata: {
-          plan_id: plan.plan_id || crypto.randomUUID(),
+          // If plan name changed, generate new plan_id to create a new plan
+          plan_id: plan.plan_name !== originalPlanName && originalPlanName ? crypto.randomUUID() : (plan.plan_id || crypto.randomUUID()),
           plan_name: plan.plan_name,
           description: plan.description || '',
           owner: plan.owner,
-          created_at: plan.created_at || new Date().toISOString(),
+          created_at: plan.plan_name !== originalPlanName && originalPlanName ? new Date().toISOString() : (plan.created_at || new Date().toISOString()),
           version: plan.version || '1.0.0',
         },
         pattern: {
@@ -449,7 +516,10 @@ function PlanEditor() {
 
       const response = await api.savePlan(transformedPlan as any, plan.owner)
       console.log('[PlanEditor] Plan saved successfully:', response)
-      setSnackbar({ open: true, message: response.message || 'Plan saved successfully!', severity: 'success' })
+      
+      // Show appropriate message based on whether it's update or create
+      const action = plan.plan_name !== originalPlanName && originalPlanName ? 'created as a new plan' : 'saved'
+      setSnackbar({ open: true, message: response.message || `Plan ${action} successfully!`, severity: 'success' })
       
       // Navigate to plan list immediately (no delay)
       console.log('[PlanEditor] Navigating to /')
@@ -546,7 +616,42 @@ function PlanEditor() {
         break
         
       case 'FULL_REPLACE':
-        patternConfig = {}
+        patternConfig = {
+          refresh_mode: plan.refresh_mode || 'direct',
+          refresh_inplace: plan.refresh_inplace || false,
+          table_format: plan.table_format || 'delta',
+          iceberg_version: plan.iceberg_version || '2',  // Always include version (for both Delta and Iceberg)
+          enable_uniform: plan.enable_uniform || false,  // Include UniForm flag for Delta tables
+        }
+        // Add cluster columns if specified
+        if (plan.cluster_columns) {
+          patternConfig.cluster_columns = plan.cluster_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        }
+        // Add partition columns if specified
+        if (plan.partition_columns) {
+          patternConfig.partition_columns = plan.partition_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        }
+        // Add filter condition if specified
+        if (plan.filter_condition) {
+          patternConfig.filter_condition = plan.filter_condition.trim()
+        }
+        // Add table properties if specified
+        if (plan.table_properties) {
+          try {
+            patternConfig.table_properties = JSON.parse(plan.table_properties)
+          } catch (e) {
+            setSnackbar({ 
+              open: true, 
+              message: 'Invalid JSON in Table Properties', 
+              severity: 'error' 
+            })
+            return
+          }
+        }
+        // Add source columns if specified
+        if (plan.source_columns) {
+          sourceConfig.columns = plan.source_columns.split(',').map((c: string) => c.trim()).filter((c: string) => c)
+        }
         break
         
       default:
@@ -748,6 +853,11 @@ function PlanEditor() {
           <Grid item xs={12}>
             <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
               Source Table
+              {plan.pattern_type === 'FULL_REPLACE' && plan.refresh_inplace && (
+                <Typography component="span" variant="body2" sx={{ ml: 2, fontStyle: 'italic', color: 'primary.main' }}>
+                  (For format conversion, use different table name than Target)
+                </Typography>
+              )}
             </Typography>
           </Grid>
           
@@ -836,7 +946,9 @@ function PlanEditor() {
             <Autocomplete
               options={catalogs.map(c => c.name)}
               value={plan.target_catalog || null}
-              onChange={(_, newValue) => setPlan({ ...plan, target_catalog: newValue || '', target_schema: '' })}
+              onChange={(_, newValue) => {
+                setPlan({ ...plan, target_catalog: newValue || '', target_schema: '' });
+              }}
               loading={loadingCatalogs}
               renderInput={(params) => (
                 <TextField
@@ -860,7 +972,9 @@ function PlanEditor() {
             <Autocomplete
               options={targetSchemas.map(s => s.name)}
               value={plan.target_schema || null}
-              onChange={(_, newValue) => setPlan({ ...plan, target_schema: newValue || '' })}
+              onChange={(_, newValue) => {
+                setPlan({ ...plan, target_schema: newValue || '' });
+              }}
               loading={loadingTargetSchemas}
               disabled={!plan.target_catalog}
               renderInput={(params) => (
@@ -884,28 +998,68 @@ function PlanEditor() {
           <Grid item xs={12} md={4}>
             <TextField
               fullWidth
-              label="Table (will be created)"
+              label={
+                plan.pattern_type === 'FULL_REPLACE' && plan.refresh_inplace
+                  ? "Table (existing table for in-place refresh)"
+                  : "Table (will be created)"
+              }
               value={plan.target_table}
-              onChange={handleChange('target_table')}
-              helperText="Target table name (SQLPilot will create it)"
+              onChange={(e) => {
+                const newValue = e.target.value;
+                setPlan({ ...plan, target_table: newValue });
+              }}
+              helperText={
+                plan.pattern_type === 'FULL_REPLACE' && plan.refresh_inplace
+                  ? "Name of existing table to refresh in-place"
+                  : "Target table name (SQLPilot will create it)"
+              }
             />
           </Grid>
           
-          <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              select
-              label="Write Mode"
-              value={plan.write_mode}
-              onChange={handleChange('write_mode')}
-            >
-              {WRITE_MODES.map((mode) => (
-                <MenuItem key={mode} value={mode}>
-                  {mode}
-                </MenuItem>
-              ))}
-            </TextField>
-          </Grid>
+          {/* Write Mode - Only show for INCREMENTAL_APPEND */}
+          {plan.pattern_type === 'INCREMENTAL_APPEND' && (
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                select
+                label="Write Mode"
+                value={plan.write_mode}
+                onChange={handleChange('write_mode')}
+                helperText="How to write data to the target table"
+              >
+                {WRITE_MODES.map((mode) => (
+                  <MenuItem key={mode} value={mode}>
+                    {mode}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+          )}
+          
+          {/* WARNING: Overwrite mode for Incremental Append */}
+          {plan.pattern_type === 'INCREMENTAL_APPEND' && plan.write_mode === 'overwrite' && (
+            <Grid item xs={12}>
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                <strong>⚠️ DATA LOSS WARNING: OVERWRITE Mode</strong>
+                <br />
+                This mode will <strong>REPLACE the entire table</strong> with <strong>ONLY the latest batch</strong> of incremental data.
+                <br />
+                <strong>All historical data will be deleted</strong> on each run!
+                <br /><br />
+                <strong>Example:</strong>
+                <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                  <li>Run 1: Load 100 records → Table has 100 rows</li>
+                  <li>Run 2: Load 20 new records → Table has <strong>20 rows</strong> (lost 100!)</li>
+                  <li>Run 3: Load 10 new records → Table has <strong>10 rows</strong> (lost 20!)</li>
+                </ul>
+                <strong>Use cases:</strong> Staging tables, temporary processing, real-time dashboards showing only "what changed today"
+                <br /><br />
+                ✅ <strong>To keep ALL history:</strong> Use write_mode='<strong>append</strong>'
+                <br />
+                ✅ <strong>To replace with FULL source:</strong> Use the '<strong>Full Replace</strong>' pattern
+              </Alert>
+            </Grid>
+          )}
           
           {/* Source Columns - Required for certain patterns (NOT for Incremental Append MERGE) */}
           {(plan.pattern_type === 'MERGE_UPSERT' || 
@@ -1070,14 +1224,314 @@ function PlanEditor() {
             </>
           )}
 
-          {/* FULL_REPLACE - No config needed */}
+          {/* FULL_REPLACE Configuration */}
           {plan.pattern_type === 'FULL_REPLACE' && (
-            <Grid item xs={12}>
-              <Alert severity="info">
-                Full Replace pattern requires no additional configuration.
-                The entire target table will be atomically replaced with source data.
-              </Alert>
-            </Grid>
+            <>
+              <Grid item xs={12}>
+                <Alert severity="info">
+                  <strong>Full Replace Pattern:</strong> Advanced table maintenance and optimization.
+                  <br />
+                  Use for repartitioning, liquid clustering, schema evolution, or applying table properties.
+                </Alert>
+              </Grid>
+
+              {/* Refresh Mode */}
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  select
+                  label="Refresh Mode"
+                  value={plan.refresh_mode}
+                  onChange={handleChange('refresh_mode')}
+                  helperText="Direct: immediate replacement. Staging: zero-downtime with validation"
+                >
+                  <MenuItem value="direct">Direct Replace (Immediate)</MenuItem>
+                  <MenuItem value="staging">Staging Table (Recommended for Production)</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Table Format */}
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  select
+                  label="Table Format (Target)"
+                  value={plan.table_format}
+                  onChange={handleChange('table_format')}
+                  helperText="Delta: Keep as Delta. Iceberg: Convert to Managed Iceberg (use different table name)"
+                >
+                  <MenuItem value="delta">Delta Lake</MenuItem>
+                  <MenuItem value="iceberg">Apache Iceberg (Managed)</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Show format conversion guidance */}
+              {plan.refresh_inplace && plan.source_table && plan.target_table && plan.source_table !== plan.target_table && (
+                <Grid item xs={12}>
+                  <Alert severity="info">
+                    <strong>💡 Format Conversion Detected</strong>
+                    <br />
+                    Source: <code>{plan.source_catalog}.{plan.source_schema}.{plan.source_table}</code>
+                    <br />
+                    Target: <code>{plan.target_catalog}.{plan.target_schema}.{plan.target_table}</code> (as <strong>{plan.table_format.toUpperCase()}</strong>)
+                    <br /><br />
+                    This will use <code>DROP TABLE IF EXISTS + CREATE TABLE</code> to convert formats.
+                  </Alert>
+                </Grid>
+              )}
+
+              {/* Format Enhancement - show for both Delta and Iceberg */}
+              {plan.table_format === 'delta' && (
+                <>
+                  <Grid item xs={12}>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={plan.enable_uniform || false}
+                          onChange={handleChange('enable_uniform')}
+                        />
+                      }
+                      label={
+                        <span>
+                          Enable UniForm (Iceberg Compatibility)
+                          <br />
+                          <em style={{ fontSize: '0.875rem', color: '#666' }}>
+                            Add Iceberg read compatibility while keeping Delta format
+                          </em>
+                        </span>
+                      }
+                    />
+                  </Grid>
+
+                  {plan.enable_uniform && (
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        fullWidth
+                        select
+                        label="UniForm Version"
+                        value={plan.iceberg_version}
+                        onChange={handleChange('iceberg_version')}
+                        helperText="v2: No deletion vectors (basic). v3: Deletion vectors + row tracking (enhanced)"
+                      >
+                        <MenuItem value="2">UniForm v2 (Iceberg v2 compatible)</MenuItem>
+                        <MenuItem value="3">UniForm v3 (Iceberg v3 compatible)</MenuItem>
+                      </TextField>
+                    </Grid>
+                  )}
+
+                  {plan.enable_uniform && (
+                    <Grid item xs={12}>
+                      <Alert severity="info">
+                        <strong>ℹ️ Delta + UniForm Clarification</strong>
+                        <br />
+                        • Table stays <strong>DELTA format</strong> but adds Iceberg metadata for dual-format reads
+                        <br />
+                        • For <strong>full Managed Iceberg conversion</strong> (Delta → Iceberg), select "Apache Iceberg (Managed)" in the "Table Format (Target)" dropdown above
+                      </Alert>
+                    </Grid>
+                  )}
+                </>
+              )}
+
+              {plan.table_format === 'iceberg' && (
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    select
+                    label="Iceberg Version"
+                    value={plan.iceberg_version}
+                    onChange={handleChange('iceberg_version')}
+                    helperText="v2: No deletion vectors. v3: Deletion vectors + row tracking"
+                  >
+                    <MenuItem value="2">Iceberg v2</MenuItem>
+                    <MenuItem value="3">Iceberg v3</MenuItem>
+                  </TextField>
+                </Grid>
+              )}
+
+
+              {/* In-place Refresh Checkbox */}
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={plan.refresh_inplace}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        setPlan({
+                          ...plan, 
+                          refresh_inplace: isChecked,
+                          // When checking INITIALLY, copy target to source as a convenience
+                          // But user can change source table name afterwards for format conversions
+                          source_catalog: isChecked && !plan.source_catalog ? plan.target_catalog : plan.source_catalog,
+                          source_schema: isChecked && !plan.source_schema ? plan.target_schema : plan.source_schema,
+                          source_table: isChecked && !plan.source_table ? plan.target_table : plan.source_table
+                        });
+                      }}
+                    />
+                  }
+                  label={
+                    <span>
+                      Refresh table in-place (source = target)
+                      <br />
+                      <em style={{ fontSize: '0.875rem', color: '#666' }}>
+                        {plan.refresh_inplace ? (
+                          <>
+                            ✓ <strong>In-place mode:</strong> If source = target (same table name), uses ALTER TABLE for upgrades.
+                            <br />
+                            • Same name: Iceberg v2→v3, Delta→UniForm (ALTER TABLE)
+                            <br />
+                            • Different names: Delta→Iceberg conversion (DROP + CREATE)
+                          </>
+                        ) : (
+                          <>
+                            Load from one table (Source) and write to a different table (Target).
+                            <br />
+                            Check this box if Source and Target are related (same data, different format/structure).
+                          </>
+                        )}
+                      </em>
+                    </span>
+                  }
+                />
+              </Grid>
+
+              {/* Alert when in-place mode is active */}
+              {plan.refresh_inplace && (
+                <Grid item xs={12}>
+                  <Alert severity="info">
+                    <strong>ℹ️ In-Place Refresh Mode</strong>
+                    <br />
+                    <br />
+                    <strong>If source = target (same table name):</strong>
+                    <br />
+                    • Uses <code>ALTER TABLE</code> statements to upgrade properties without recreating the table
+                    <br />
+                    • Examples: Iceberg v2→v3, Delta→Delta+UniForm, adding Liquid Clustering
+                    <br />
+                    • Table data remains unchanged, only metadata/properties are modified
+                    <br />
+                    <br />
+                    <strong>If source ≠ target (different table names):</strong>
+                    <br />
+                    • Uses <code>DROP TABLE IF EXISTS + CREATE TABLE</code> for format conversion or table recreation
+                    <br />
+                    • Examples: <strong>Delta→Iceberg</strong>, <strong>Iceberg→Delta</strong>, or creating new table with different config
+                    <br />
+                    • Data is copied from source to newly created target table
+                    <br />
+                    • <strong>💡 TIP:</strong> For format conversion, select target format in "Table Format (Target)" dropdown above
+                  </Alert>
+                </Grid>
+              )}
+
+              {/* Partition Columns */}
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Partition Columns (optional)"
+                  value={plan.partition_columns}
+                  onChange={handleChange('partition_columns')}
+                  helperText="Comma-separated columns for PARTITIONED BY (e.g., year, month, region)"
+                  placeholder="year, month, region"
+                  disabled={!!plan.cluster_columns}
+                />
+              </Grid>
+
+              {/* Cluster Columns (Liquid Clustering) */}
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Clustering Columns (optional)"
+                  value={plan.cluster_columns}
+                  onChange={handleChange('cluster_columns')}
+                  helperText="Comma-separated columns for CLUSTER BY / Liquid Clustering (e.g., customer_id, order_date)"
+                  placeholder="customer_id, order_date"
+                  disabled={!!plan.partition_columns}
+                />
+              </Grid>
+
+              {/* Warning if both are disabled */}
+              {plan.partition_columns && plan.cluster_columns && (
+                <Grid item xs={12}>
+                  <Alert severity="warning">
+                    Cannot specify both partitioning and clustering. Please choose one.
+                  </Alert>
+                </Grid>
+              )}
+
+              {/* Warning for Iceberg v2 + Liquid Clustering */}
+              {plan.table_format === 'iceberg' && plan.iceberg_version === '2' && plan.cluster_columns && (
+                <Grid item xs={12}>
+                  <Alert severity="warning">
+                    <strong>⚠️ Iceberg v2 + Liquid Clustering Limitation</strong>
+                    <br />
+                    Row-level concurrency is NOT supported on Iceberg v2 with Liquid Clustering.
+                    <br />
+                    This may cause write conflicts for concurrent operations (DELETE, MERGE, UPDATE).
+                    <br />
+                    <strong>Recommendation:</strong> Use Iceberg v3 if you need row-level concurrency.
+                  </Alert>
+                </Grid>
+              )}
+
+              {/* Filter Condition */}
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Filter Condition (optional)"
+                  value={plan.filter_condition}
+                  onChange={handleChange('filter_condition')}
+                  helperText="WHERE clause to filter data during refresh (e.g., active = true AND created_date >= '2020-01-01')"
+                  placeholder="active = true AND created_date >= '2020-01-01'"
+                  multiline
+                  rows={2}
+                />
+              </Grid>
+
+              {/* Table Properties */}
+              <Grid item xs={12}>
+                <Typography variant="subtitle2" gutterBottom sx={{ mt: 1 }}>
+                  Table Properties (JSON - optional)
+                </Typography>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={8}
+                  value={plan.table_properties}
+                  onChange={handleChange('table_properties')}
+                  helperText={`JSON object with ${plan.table_format === 'delta' ? 'Delta Lake' : 'Apache Iceberg'} table properties. See Databricks documentation for available properties.`}
+                  placeholder={plan.table_format === 'delta' ? `{
+  "delta.autoOptimize.optimizeWrite": "true",
+  "delta.autoOptimize.autoCompact": "auto",
+  "delta.enableDeletionVectors": "true",
+  "delta.columnMapping.mode": "name",
+  "delta.targetFileSize": "128mb",
+  "delta.parquet.compression.codec": "ZSTD"
+}` : `{
+  "iceberg.autoOptimize.optimizeWrite": "true",
+  "iceberg.enableDeletionVectors": "true",
+  "iceberg.targetFileSize": "128mb"
+}`}
+                  sx={{ fontFamily: 'monospace' }}
+                />
+              </Grid>
+
+              {/* Staging Mode Info */}
+              {plan.refresh_mode === 'staging' && (
+                <Grid item xs={12}>
+                  <Alert severity="info">
+                    <strong>Staging Table Approach:</strong>
+                    <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                      <li>Creates a staging table with suffix <code>_staging</code></li>
+                      <li>Allows validation before promoting to production</li>
+                      <li>Zero downtime - readers use old table during transition</li>
+                      <li>SQL includes commented-out swap commands for manual execution</li>
+                    </ul>
+                  </Alert>
+                </Grid>
+              )}
+            </>
           )}
 
           {/* SNAPSHOT Configuration */}

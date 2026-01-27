@@ -100,6 +100,14 @@ class PreviewEngine:
             # Step 6: Generate warnings
             preview_result['warnings'] = self._generate_warnings(plan, sql)
             
+            # Step 7: Validate table format for Full Replace in-place mode
+            if plan.get('pattern', {}).get('type') == 'FULL_REPLACE':
+                format_validation = self._validate_table_format_for_inplace(plan, warehouse_id)
+                if format_validation.get('error'):
+                    preview_result['errors'].append(format_validation['error'])
+                if format_validation.get('warning'):
+                    preview_result['warnings'].append(format_validation['warning'])
+            
         except Exception as e:
             preview_result['errors'].append(f"Preview error: {str(e)}")
         
@@ -316,6 +324,120 @@ class PreviewEngine:
             warnings.append("SCD2 pattern involves multiple steps and may take longer to execute")
         
         return warnings
+    
+    def _validate_table_format_for_inplace(self, plan: Dict[str, Any], warehouse_id: str) -> Dict[str, Any]:
+        """
+        Validate table format when using Full Replace with in-place refresh
+        
+        For format conversions (Delta → Iceberg), allows different source/target names.
+        
+        Returns:
+            Dict with 'error' or 'warning' keys if there are issues
+        """
+        result = {}
+        
+        pattern_config = plan.get('pattern_config', {})
+        refresh_inplace = pattern_config.get('refresh_inplace', False)
+        
+        # Only validate if in-place mode is enabled
+        if not refresh_inplace:
+            return result
+        
+        source = plan.get('source', {})
+        target = plan.get('target', {})
+        target_format = pattern_config.get('table_format', 'delta').lower()
+        
+        source_catalog = source.get('catalog')
+        source_schema = source.get('schema')
+        source_table = source.get('table')
+        target_catalog = target.get('catalog')
+        target_schema = target.get('schema')
+        target_table = target.get('table')
+        
+        if not all([source_catalog, source_schema, source_table, target_catalog, target_schema, target_table]):
+            return result
+        
+        source_fqn = f"{source_catalog}.{source_schema}.{source_table}"
+        target_fqn = f"{target_catalog}.{target_schema}.{target_table}"
+        
+        # Check if source and target are different
+        if source_fqn != target_fqn:
+            # Different tables - this is OK ONLY if it's a format conversion
+            # Let's check the source table format
+            try:
+                from databricks.sdk import WorkspaceClient
+                if hasattr(self.permission_validator, 'workspace_client'):
+                    ws = self.permission_validator.workspace_client
+                else:
+                    ws = WorkspaceClient()
+                
+                source_table_info = ws.tables.get(full_name=source_fqn)
+                
+                if source_table_info.data_source_format:
+                    source_format = source_table_info.data_source_format.value.lower() if hasattr(source_table_info.data_source_format, 'value') else str(source_table_info.data_source_format).lower()
+                    
+                    if source_format == target_format:
+                        # Same format but different table names - this is suspicious
+                        result['warning'] = (
+                            f"⚠️  'Refresh table in-place' is enabled, but source and target are different tables with the SAME format ({source_format.upper()}).\n\n"
+                            f"  Source: {source_fqn} ({source_format.upper()})\n"
+                            f"  Target: {target_fqn} ({target_format.upper()})\n\n"
+                            f"This is unusual. 'In-place refresh' typically means source = target for compaction/clustering.\n"
+                            f"If you're just copying data, consider unchecking 'Refresh table in-place'."
+                        )
+                    else:
+                        # Different formats - this is a format conversion, which is valid!
+                        result['warning'] = (
+                            f"✅ Format conversion detected: {source_format.upper()} → {target_format.upper()}\n\n"
+                            f"  Source: {source_fqn} ({source_format.upper()})\n"
+                            f"  Target: {target_fqn} ({target_format.upper()})\n\n"
+                            f"Note: 'Refresh table in-place' is a bit misleading here since you're creating a new table.\n"
+                            f"This will read from the source and create a new target table with the specified format."
+                        )
+            
+            except Exception as e:
+                error_str = str(e)
+                if "TABLE_OR_VIEW_NOT_FOUND" in error_str or "does not exist" in error_str:
+                    result['error'] = (
+                        f"❌ Source table '{source_fqn}' does not exist.\n"
+                        f"Cannot read from a non-existent table."
+                    )
+        
+        else:
+            # Source = Target (true in-place refresh)
+            # Validate that the format matches the existing table
+            try:
+                from databricks.sdk import WorkspaceClient
+                if hasattr(self.permission_validator, 'workspace_client'):
+                    ws = self.permission_validator.workspace_client
+                else:
+                    ws = WorkspaceClient()
+                
+                table_info = ws.tables.get(full_name=target_fqn)
+                
+                if table_info.data_source_format:
+                    existing_format = table_info.data_source_format.value.lower() if hasattr(table_info.data_source_format, 'value') else str(table_info.data_source_format).lower()
+                    
+                    if existing_format != target_format:
+                        result['error'] = (
+                            f"❌ In-place refresh format mismatch: "
+                            f"Existing table '{target_fqn}' is {existing_format.upper()}, "
+                            f"but you're trying to refresh it as {target_format.upper()}. "
+                            f"You CANNOT change table format with true in-place refresh (source = target). "
+                            f"Either: (1) Change 'Table Format' to {existing_format.upper()} to match the existing table, "
+                            f"or (2) Set a different target table name for format conversion."
+                        )
+            
+            except Exception as e:
+                error_str = str(e)
+                if "TABLE_OR_VIEW_NOT_FOUND" in error_str or "does not exist" in error_str:
+                    result['warning'] = (
+                        f"⚠️  In-place refresh mode enabled, but table '{target_fqn}' does not exist yet. "
+                        f"This will create a new table (not truly in-place). "
+                        f"Consider unchecking 'Refresh table in-place' for clarity."
+                    )
+        
+        return result
     
     def _format_sql(self, sql: str) -> str:
         """Format SQL for readability"""

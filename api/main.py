@@ -317,6 +317,36 @@ async def get_table_columns(catalog: str, schema: str, table: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch columns: {str(e)}")
 
+@app.get("/api/v1/catalogs/{catalog}/schemas/{schema}/tables/{table}/format")
+async def get_table_format(catalog: str, schema: str, table: str):
+    """Get table format (Delta, Iceberg, etc.) from Unity Catalog"""
+    try:
+        table_info = workspace_client.tables.get(
+            full_name=f"{catalog}.{schema}.{table}"
+        )
+        
+        # The data_source_format tells us if it's DELTA, ICEBERG, etc.
+        data_source_format = table_info.data_source_format
+        
+        # Normalize to lowercase
+        if data_source_format:
+            format_lower = data_source_format.value.lower() if hasattr(data_source_format, 'value') else str(data_source_format).lower()
+        else:
+            format_lower = "unknown"
+        
+        return {
+            "catalog": catalog,
+            "schema": schema,
+            "table": table,
+            "format": format_lower,  # "delta", "iceberg", etc.
+            "table_type": table_info.table_type.value if table_info.table_type else None
+        }
+    except Exception as e:
+        # Table doesn't exist or other error
+        if "TABLE_OR_VIEW_NOT_FOUND" in str(e) or "does not exist" in str(e):
+            raise HTTPException(status_code=404, detail=f"Table {catalog}.{schema}.{table} not found")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch table format: {str(e)}")
+
 @app.get("/api/v1/warehouses")
 async def list_warehouses():
     """List available SQL warehouses"""

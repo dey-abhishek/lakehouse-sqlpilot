@@ -586,9 +586,10 @@ FROM {source_fqn}
         # Generate ALTER TABLE statements
         if props:
             prop_lines = [f"  '{k}' = '{v}'" for k, v in props.items()]
+            prop_str = ',\n'.join(prop_lines)  # Create string first, then use in f-string
             sql += f"""ALTER TABLE {target_fqn}
 SET TBLPROPERTIES (
-{',\n'.join(prop_lines)}
+{prop_str}
 );
 
 """
